@@ -69,7 +69,6 @@
   },
   "scripts": {
     "dev": "npm run build && node bin/dev",
-    "lint": "eslint --cache ./",
     "build": "babel src/ -d lib/ --copy-files",
     "test": "cross-env PARSE_SERVER_TEST_DB=dynamodb TESTING=1 $COVERAGE_OPTION jasmine",
     "test:win": "cross-env MONGODB_VERSION=${MONGODB_VERSION:=3.2.6} MONGODB_STORAGE_ENGINE=mmapv1 TESTING=1 jasmine",
