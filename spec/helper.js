@@ -6,6 +6,7 @@ jasmine.DEFAULT_TIMEOUT_INTERVAL = process.env.PARSE_SERVER_TEST_TIMEOUT || 5000
 
 jasmine.getEnv().clearReporters();
 jasmine.getEnv().addReporter(new SpecReporter());
+const Promise = require('bluebird');
 
 global.on_db = (db, callback, elseCallback) => {
   if (process.env.PARSE_SERVER_TEST_DB == db) {
@@ -33,7 +34,7 @@ const GridStoreAdapter = require('../src/Adapters/Files/GridStoreAdapter').GridS
 const FSAdapter = require('parse-server-fs-adapter');
 const PostgresStorageAdapter = require('../src/Adapters/Storage/Postgres/PostgresStorageAdapter');
 const RedisCacheAdapter = require('../src/Adapters/Cache/RedisCacheAdapter').default;
-
+const DDB = require('../src/Adapters/Storage/DynamoDB').DynamoDB;
 const mongoURI = 'mongodb://localhost:27017/parseServerMongoAdapterTestDatabase';
 const postgresURI = 'postgres://localhost:5432/parse_server_postgres_adapter_test_database';
 let databaseAdapter;
@@ -47,6 +48,19 @@ if (process.env.PARSE_SERVER_TEST_DB === 'postgres') {
     uri: process.env.PARSE_SERVER_TEST_DATABASE_URI || postgresURI,
     collectionPrefix: 'test_',
   });
+} else if (process.env.PARSE_SERVER_TEST_DB === 'dynamodb') {
+
+const a = new DDB('parse-server', { 
+    endpoint : 'http://localhost:8000',
+    region : 'earth',
+    accessKeyId : 'key',
+    secretAccessKey : 'secret',
+    apiVersion: '2012-08-10'
+});
+
+databaseAdapter = a.getAdapter();
+//databaseAdapter.deleteAllClasses();
+
 } else {
   startDB = require('mongodb-runner/mocha/before').bind({
     timeout: () => {},
@@ -206,6 +220,8 @@ afterEach(function(done) {
     }
     on_db('postgres', () => {
       TestUtils.destroyAllDataPermanently().then(done, done);
+    }, done);
+    on_db('dynamodb', () => {
     }, done);
   };
   Parse.Cloud._removeAllHooks();

@@ -4,14 +4,13 @@ node_js:
 - '6.10'
 - '7.10'
 services:
-  - mongodb
-  - postgresql
   - redis-server
   - docker
 addons:
-  postgresql: '9.5'
+  hosts:
+  - dynamodb-local
   apt_packages:
-  - postgresql-9.5-postgis-2.3
+  - opensdk-jre
 branches:
   only:
   - master
@@ -28,16 +27,14 @@ env:
   global:
   - COVERAGE_OPTION='./node_modules/.bin/nyc'
   matrix:
-  - MONGODB_VERSION=3.2.13
-  - MONGODB_VERSION=3.4.4
-  - PARSE_SERVER_TEST_DB=postgres
+  - PARSE_SERVER_TEST_DB=dynamodb
   - PARSE_SERVER_TEST_CACHE=redis
 before_script:
 - node -e 'require("./lib/index.js")'
-- psql -c 'create database parse_server_postgres_adapter_test_database;' -U postgres
-- psql -c 'CREATE EXTENSION postgis;' -U postgres -d parse_server_postgres_adapter_test_database
-- psql -c 'CREATE EXTENSION postgis_topology;' -U postgres -d parse_server_postgres_adapter_test_database
-- silent=1 mongodb-runner --start
+- wget http://dynamodb-local.s3-website-us-west-2.amazonaws.com/dynamodb_local_latest.tar.gz -O /tmp/dynamodb_local_latest.tar.gz
+- tar -xzf /tmp/dynamodb_local_latest.tar.gz -C /tmp
+- java -Djava.library.path=/tmp/DynamoDBLocal_lib -jar /tmp/DynamoDBLocal.jar -inMemory &
+- sleep 10
 after_script:
 - bash <(curl -s https://codecov.io/bash)
 
@@ -65,4 +62,4 @@ jobs:
           on:
             tags: true
             all_branches: true
-            repo: parse-community/parse-server
+            repo: benishak/parse-server
