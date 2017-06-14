@@ -10,7 +10,7 @@ addons:
   hosts:
   - dynamodb-local
   apt_packages:
-  - opensdk-jre
+  - openjdk-jre
 branches:
   only:
   - master
