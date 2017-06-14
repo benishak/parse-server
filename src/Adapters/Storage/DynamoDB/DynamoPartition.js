@@ -1,0 +1,852 @@
+// Partition is the class where objects are stored
+// Partition is like Collection in MongoDB
+// a Partition is represented by a hash or partition key in DynamoDB
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+const aws_sdk_1 = require("aws-sdk");
+const Promise = require("bluebird");
+const node_1 = require("parse/node");
+const cryptoUtils_1 = require("parse-server/lib/cryptoUtils");
+const randomstring_1 = require("randomstring");
+var u = require('util'); // for debugging;
+const DynamoComperator = {
+    '$gt': 'GT',
+    '$lt': 'LT',
+    '$gte': 'GE',
+    '$lte': 'LE',
+    '$eq': 'EQ',
+    '$ne': 'NE',
+    '$in': 'IN',
+    '$exists': 'NOT_NULL',
+    '$regex': 'BEGINS_WITH',
+};
+// helper class to generate DynamoDB FilterExpression from MongoDB Query Object
+class FilterExpression {
+    constructor() {
+        this.FilterExpression = '[first]';
+        this.KeyConditionExpression = '[first]';
+        this.ExpressionAttributeValues = {};
+        this.ExpressionAttributeNames = {};
+        this.comperators = {
+            '$gt': '>',
+            '$lt': '<',
+            '$gte': '>=',
+            '$lte': '<=',
+            '$eq': '=',
+            '$ne': '<>',
+            '$in': 'IN',
+            '$or': 'OR',
+            '$and': 'AND',
+            '$not': 'NOT',
+            '$exists': '*',
+            '$regex': '*',
+            '$nin': '*',
+        };
+        this.__not = {
+            '$gt': '<',
+            '$lt': '>',
+            '$gte': '<=',
+            '$lte': '>=',
+            '$eq': '<>',
+            '$ne': '='
+        };
+    }
+    isQuery(object = {}) {
+        let $ = true;
+        for (let key in object) {
+            $ = $ && (this.comperators[key] != undefined);
+        }
+        return $;
+    }
+    createExp(key, value, op, not = false) {
+        if (!op) {
+            throw new node_1.Parse.Error(node_1.Parse.Error.INVALID_QUERY, 'DynamoDB : Operation is not supported');
+        }
+        let _key = key.replace(/^(_|\$)+/, '');
+        let exp;
+        let index = 0;
+        let _vl;
+        let _kk;
+        let keys = key.split('.');
+        if (keys.length == 1) {
+            _key = _key.toLowerCase();
+            let _k = _key.replace(/\[[0-9]+\]/g, '');
+            this.ExpressionAttributeNames['#' + _k] = keys[0].replace(/\[[0-9]+\]/g, '');
+            let index = Object.keys(this.ExpressionAttributeValues).filter(e => {
+                if (e.indexOf(':' + _k) === 0) {
+                    return e;
+                }
+            }).length;
+            _vl = ':' + _k + '_' + index;
+            this.ExpressionAttributeValues[_vl] = value;
+            _kk = _key;
+        }
+        else {
+            let attributes = Object.keys(this.ExpressionAttributeNames);
+            for (let i = 0; i < keys.length; i++) {
+                let _key = keys[i].replace(/^(_|\$)+/, '');
+                _key = _key.toLowerCase();
+                let _k = _key.replace(/\[[0-9]+\]/g, '');
+                if (!(_key in attributes)) {
+                    this.ExpressionAttributeNames['#' + _k] = keys[i].replace(/\[[0-9]+\]/g, '');
+                    if (i == (keys.length - 1)) {
+                        let index = Object.keys(this.ExpressionAttributeValues).filter(e => {
+                            if (e.indexOf(':' + _k) === 0) {
+                                return e;
+                            }
+                        }).length;
+                        _vl = ':' + _k + '_' + index;
+                        this.ExpressionAttributeValues[_vl] = value;
+                    }
+                }
+                keys[i] = keys[i].replace(keys[i], '#' + _key);
+                _kk = _k;
+            }
+            _kk = keys.join('.').replace('#', '');
+        }
+        switch (op) {
+            case 'begins_with':
+                exp = 'begins_with([key], [value])';
+                break;
+            case 'attribute_exists':
+                exp = 'attribute_exists([key])';
+                delete this.ExpressionAttributeValues[_vl];
+                break;
+            case 'attribute_not_exists':
+                exp = 'attribute_not_exists([key])';
+                delete this.ExpressionAttributeValues[_vl];
+                break;
+            case 'contains':
+                exp = 'contains([key], [value])';
+                break;
+            case 'IN':
+                let _v = this.ExpressionAttributeValues[_vl];
+                if (_v.indexOf(null) > -1 || _v.indexOf(undefined) > -1) {
+                    if (_v.length == 2) {
+                        let _k = ':' + _kk + '_' + index;
+                        this.ExpressionAttributeValues[_k] = _v.sort()[0];
+                        exp = '( [key] = [value] OR attribute_not_exists([key]) )';
+                    }
+                    else {
+                        let _vs = [];
+                        _v = _v.filter(e => e != null);
+                        _v.forEach((e, i) => {
+                            let _k = ':' + _kk + '_' + index + '_' + i;
+                            this.ExpressionAttributeValues[_k] = e;
+                            delete this.ExpressionAttributeValues[_vl];
+                            _vs.push(_k);
+                        });
+                        exp = '( [key] IN [value] OR attribute_not_exists([key]) )'.replace('[value]', '(' + _vs.join() + ')');
+                    }
+                }
+                else {
+                    let _vs = [];
+                    _v = _v.filter(e => e != null);
+                    _v.forEach((e, i) => {
+                        let _k = ':' + _kk + '_' + index + '_' + i;
+                        this.ExpressionAttributeValues[_k] = e;
+                        delete this.ExpressionAttributeValues[_vl];
+                        _vs.push(_k);
+                    });
+                    exp = '[key] IN [value]'.replace('[value]', '(' + _vs.join() + ')');
+                }
+                break;
+            default:
+                exp = '[key] [op] [value]';
+                break;
+        }
+        exp = exp.replace(/\[key\]/g, '#' + _kk);
+        exp = exp.replace(/\[value\]/g, _vl);
+        exp = exp.replace(/\[op\]/g, op);
+        if (not) {
+            exp = 'NOT ( ' + exp + ' )';
+        }
+        return exp;
+    }
+    build(query = {}, key = null, not = false, _op = null) {
+        let exp, _cmp_;
+        Object.keys(query).forEach((q, i) => {
+            // if (query['_id']) {
+            //     delete query['_id'];
+            // }
+            if (i < Object.keys(query).length - 1 && Object.keys(query).length > 1) {
+                if (_op) {
+                    this.FilterExpression = this.FilterExpression.replace('[first]', '( [first] AND [next] )');
+                }
+                else {
+                    this.FilterExpression = this.FilterExpression.replace('[first]', '[first] AND [next]');
+                }
+            }
+            if (i < Object.keys(query).length) {
+                this.FilterExpression = this.FilterExpression.replace('[next]', '[first]');
+            }
+            switch (q) {
+                case '$nor':
+                    throw new node_1.Parse.Error(node_1.Parse.Error.INVALID_QUERY, 'DynamoDB : Operator [' + q + '] not supported');
+                case '$or':
+                case '$and':
+                    query[q].forEach((subquery, j) => {
+                        if (j < Object.keys(query[q]).length - 1 && Object.keys(query[q]).length > 1) {
+                            if (_op == '$and') {
+                                this.FilterExpression = this.FilterExpression.replace('[first]', '( [first] ' + this.comperators[q] + ' [next] )');
+                            }
+                            else {
+                                this.FilterExpression = this.FilterExpression.replace('[first]', '[first] ' + this.comperators[q] + ' [next]');
+                            }
+                        }
+                        this.build(subquery, key, not, q);
+                    });
+                    break;
+                case '$eq':
+                case '$ne':
+                case '$gt':
+                case '$lt':
+                case '$gte':
+                case '$lte':
+                    _cmp_ = not ? this.__not[q] : this.comperators[q];
+                    exp = this.createExp(key, query[q], _cmp_, false);
+                    this.FilterExpression = this.FilterExpression.replace('[first]', exp);
+                    break;
+                case '$in':
+                case '$nin':
+                    let list = query[q] || [];
+                    if (list.length === 0)
+                        list = ['*']; //throw new Parse.Error(Parse.Error.INVALID_QUERY, 'DynamoDB : [$in] cannot be empty');
+                    if (list.length === 1) {
+                        query[key] = query[q][0];
+                        delete query[q];
+                        this.build(query, key, not, _op);
+                    }
+                    else {
+                        not = q == '$nin' ? true : not;
+                        exp = this.createExp(key, query[q], 'IN', not);
+                        this.FilterExpression = this.FilterExpression.replace('[first]', exp);
+                    }
+                    break;
+                case '$regex':
+                    _cmp_ = query[q].startsWith('^') ? 'begins_with' : 'contains';
+                    query[q] = query[q].replace('^', '');
+                    query[q] = query[q].replace('\\Q', '');
+                    query[q] = query[q].replace('\\E', '');
+                    exp = this.createExp(key, query[q], _cmp_, not);
+                    this.FilterExpression = this.FilterExpression.replace('[first]', exp);
+                    break;
+                case '$exists':
+                    _cmp_ = query[q] ? 'attribute_exists' : 'attribute_not_exists';
+                    exp = this.createExp(key, query[q], _cmp_, not);
+                    this.FilterExpression = this.FilterExpression.replace('[first]', exp);
+                    break;
+                case '$not':
+                    this.build(query[q], key, true, _op);
+                    break;
+                default:
+                    if (query[q] && query[q].constructor === Object && this.isQuery(query[q])) {
+                        this.build(query[q], q, not, _op);
+                    }
+                    else {
+                        if (query[q] == undefined) {
+                            exp = this.createExp(q, query[q], 'attribute_not_exists', not);
+                        }
+                        else {
+                            exp = this.createExp(q, query[q], '=', not);
+                        }
+                        this.FilterExpression = this.FilterExpression.replace('[first]', exp);
+                    }
+                    break;
+            }
+        });
+        return this;
+    }
+    buildKC(query = {}, key = null, not = false, _op = null) {
+        let exp, _cmp_;
+        if (Object.keys(query).length > 1 && query['_id']) {
+            query = {
+                _id: query['_id']
+            };
+        }
+        Object.keys(query).forEach((q, i) => {
+            if (i < (Object.keys(query).length - 1) && Object.keys(query).length > 1) {
+                if (_op) {
+                    this.KeyConditionExpression = this.KeyConditionExpression.replace('[first]', '( [first] AND [next] )');
+                }
+                else {
+                    this.KeyConditionExpression = this.KeyConditionExpression.replace('[first]', '[first] AND [next]');
+                }
+            }
+            if (i < Object.keys(query).length) {
+                this.KeyConditionExpression = this.KeyConditionExpression.replace('[next]', '[first]');
+            }
+            switch (q) {
+                case '$ne':
+                case '$in':
+                case '$nin':
+                case '$or':
+                case '$nor':
+                case '$not':
+                case '$exists':
+                    throw new node_1.Parse.Error(node_1.Parse.Error.INVALID_QUERY, 'DynamoDB : Cannot apply [' + q + '] on objectId');
+                case '$and':
+                    query[q].forEach((subquery, j) => {
+                        if (j < Object.keys(query[q]).length - 1 && Object.keys(query[q]).length > 1) {
+                            if (_op == '$and') {
+                                this.KeyConditionExpression = this.KeyConditionExpression.replace('[first]', '( [first] ' + this.comperators[q] + ' [next] )');
+                            }
+                            else {
+                                this.KeyConditionExpression = this.KeyConditionExpression.replace('[first]', '[first] ' + this.comperators[q] + ' [next]');
+                            }
+                        }
+                        this.buildKC(subquery, key, not, q);
+                    });
+                    break;
+                case '$eq':
+                case '$gt':
+                case '$lt':
+                case '$gte':
+                case '$lte':
+                    _cmp_ = not ? this.__not[q] : this.comperators[q];
+                    exp = this.createExp(key, query[q], _cmp_, false);
+                    this.KeyConditionExpression = this.KeyConditionExpression.replace('[first]', exp);
+                    break;
+                case '$regex':
+                    _cmp_ = query[q].startsWith('^') ? 'begins_with' : null;
+                    if (_cmp_) {
+                        query[q] = query[q].replace('^\\Q', '');
+                        query[q] = query[q].replace('\\E', '');
+                        exp = this.createExp(key, query[q], _cmp_, not);
+                        this.KeyConditionExpression = this.KeyConditionExpression.replace('[first]', exp);
+                    }
+                    else {
+                        throw new node_1.Parse.Error(node_1.Parse.Error.INVALID_QUERY, 'DynamoDB : Cannot apply [contains] on objectId');
+                    }
+                    break;
+                case '_id':
+                    if (query[q].constructor === Object && this.isQuery(query[q])) {
+                        this.buildKC(query[q], q, not, _op);
+                    }
+                    else {
+                        exp = this.createExp(q, query[q], '=', not);
+                        this.KeyConditionExpression = this.KeyConditionExpression.replace('[first]', exp);
+                    }
+                    break;
+                default:
+                    break;
+            }
+        });
+        return this;
+    }
+    buildUpdateExpression(query) {
+    }
+}
+exports.FilterExpression = FilterExpression;
+class Partition {
+    constructor(database, className, service) {
+        this.dynamo = new aws_sdk_1.DynamoDB.DocumentClient({ service: service });
+        this.database = database;
+        this.className = className;
+    }
+    createCondition(comperator, value) {
+        let condition = {
+            ComparisonOperator: DynamoComperator[comperator] || "EQ",
+            AttributeValueList: [value]
+        };
+        if (comperator === '$exists') {
+            if (value === true) {
+                condition.ComparisonOperator = "NULL";
+            }
+            delete condition.AttributeValueList;
+        }
+        return condition;
+    }
+    getDynamoQueryFilter(query = {}) {
+        let QueryFilter = {};
+        for (let key in query) {
+            let cmp = Object.keys(query[key])[0];
+            QueryFilter[key] = this.createCondition(cmp, query[key][cmp] || query[key]);
+        }
+        return QueryFilter;
+    }
+    _getProjectionExpression(keys, _params) {
+        if (!_params.ExpressionAttributeNames) {
+            _params.ExpressionAttributeNames = {};
+        }
+        let attributes = Object.keys(_params.ExpressionAttributeNames);
+        keys = keys.map(key => {
+            const keys = key.split('.');
+            for (let i = 0; i < keys.length; i++) {
+                let _key = '#' + keys[i].replace(/^(_|\$)+/, '');
+                _key = _key.replace(/\[[0-9]+\]/, '');
+                if (!(_key in attributes)) {
+                    _params.ExpressionAttributeNames[_key] = key;
+                }
+                keys[i] = _key;
+            }
+            return keys.join('.');
+        });
+        return keys.join(', ');
+    }
+    _getUpdateExpression(object, _params) {
+        if (!_params.ExpressionAttributeNames) {
+            _params.ExpressionAttributeNames = {};
+        }
+        if (!_params.ExpressionAttributeValues) {
+            _params.ExpressionAttributeValues = {};
+        }
+        let $set = {}, $unset = [], $inc = {};
+        let _set = [], _unset = [], _inc = [];
+        let exp;
+        Object.keys(object || {}).forEach(_op => {
+            switch (_op) {
+                case '$setOnInsert':
+                case '$set':
+                    $set = object['$set'] || {};
+                    break;
+                case '$unset':
+                    $unset = object['$unset'] || {};
+                    break;
+                case '$inc':
+                    $inc = object['$inc'] || {};
+                    break;
+                case '$mul':
+                case '$min':
+                case '$max':
+                case '$rename':
+                case '$currentDate':
+                case '$each':
+                case '$sort':
+                case '$slice':
+                case '$position':
+                case '$bit':
+                case '$isolated':
+                    throw new node_1.Parse.Error(node_1.Parse.Error.INVALID_QUERY, 'DynamoDB : [' + _op + '] not supported on update');
+                default:
+                    $set = object;
+                    break;
+            }
+        });
+        let attributes = Object.keys(_params.ExpressionAttributeNames || {});
+        Object.keys($set).forEach(key => {
+            if ($set[key] != undefined) {
+                const lv = randomstring_1.generate(5);
+                const keys = key.split('.');
+                for (let i = 0; i < keys.length; i++) {
+                    let _key = keys[i].replace(/^(_|\$)+/, '');
+                    _key = _key.toLowerCase();
+                    let _k = _key.replace(/\[[0-9]+\]/g, '');
+                    if (!(_key in attributes)) {
+                        _params.ExpressionAttributeNames['#' + _k] = keys[i].replace(/\[[0-9]+\]/g, '');
+                        if (i == (keys.length - 1)) {
+                            _params.ExpressionAttributeValues[':' + lv] = $set[key];
+                        }
+                    }
+                    keys[i] = keys[i].replace(keys[i], _key);
+                }
+                let exp = '[key] = [value]';
+                exp = exp.replace('[key]', '#' + keys.join('.'));
+                exp = exp.replace('[value]', ':' + lv);
+                _set.push(exp);
+            }
+            else {
+                if (!(key in $unset)) {
+                    _unset.push(key);
+                }
+            }
+        });
+        Object.keys($inc).forEach(key => {
+            if ($inc[key] != undefined) {
+                const lv = randomstring_1.generate(5);
+                const keys = key.split('.');
+                for (let i = 0; i < keys.length; i++) {
+                    let _key = keys[i].replace(/^(_|\$)+/, '');
+                    _key = _key.toLowerCase();
+                    let _k = _key.replace(/\[[0-9]+\]/g, '');
+                    if (!(_key in attributes)) {
+                        _params.ExpressionAttributeNames['#' + _k] = keys[i].replace(/\[[0-9]+\]/g, '');
+                        if (i == (keys.length - 1)) {
+                            _params.ExpressionAttributeValues[':' + lv] = $inc[key];
+                        }
+                    }
+                    keys[i] = keys[i].replace(keys[i], _key);
+                }
+                let exp = '[key] = [key] + [value]';
+                exp = exp.replace(/\[key\]/g, '#' + keys.join('.'));
+                exp = exp.replace('[value]', ':' + lv);
+                _set.push(exp);
+            }
+        });
+        _unset = _unset.concat(Object.keys($unset).map(key => {
+            const keys = key.split('.');
+            for (let i = 0; i < keys.length; i++) {
+                let _key = '#' + keys[i].replace(/^(_|\$)+/, '');
+                _key = _key.replace(/\[[0-9]+\]/g, '');
+                if (!(_key in attributes)) {
+                    _params.ExpressionAttributeNames[_key] = keys[i].replace(/\[[0-9]+\]/g, '');
+                }
+                keys[i] = keys[i].replace(keys[i], _key);
+            }
+            return keys.join('.');
+        }));
+        if (_set.length > 0) {
+            if (exp) {
+                exp = exp + ' SET ' + _set.join(', ');
+            }
+            else {
+                exp = 'SET ' + _set.join(', ');
+            }
+        }
+        if (_unset.length) {
+            if (exp) {
+                exp = exp + ' REMOVE ' + _unset.join(', ');
+            }
+            else {
+                exp = 'REMOVE ' + _unset.join(', ');
+            }
+        }
+        //console.log('UPDATE EXPRESSION', exp);
+        return exp;
+    }
+    _get(id, keys = []) {
+        keys = keys || [];
+        let params = {
+            TableName: this.database,
+            Key: {
+                _pk_className: this.className,
+                _sk_id: id
+            }
+        };
+        if (keys.length > 0) {
+            params.ProjectionExpression = this._getProjectionExpression(keys, params);
+        }
+        return new Promise((resolve, reject) => {
+            this.dynamo.get(params, (err, data) => {
+                if (err) {
+                    reject(err);
+                }
+                else {
+                    if (data.Item) {
+                        delete data.Item._pk_className;
+                        delete data.Item._sk_id;
+                        resolve([data.Item]);
+                    }
+                    else {
+                        resolve([]);
+                    }
+                }
+            });
+        });
+    }
+    _query(query = {}, options = {}) {
+        const between = (n, a, b) => {
+            return (n - a) * (n - b) <= 0;
+        };
+        return new Promise((resolve, reject) => {
+            const _exec = (query = {}, options = {}, params = null, results = []) => {
+                if (!params) {
+                    let keys = Object.keys(options.keys || {});
+                    let count = options.count ? true : false;
+                    // maximum by DynamoDB is 100 or 1MB
+                    let limit;
+                    if (!count) {
+                        limit = options.limit ? options.limit : 100;
+                    }
+                    // DynamoDB sorts only by sort key (in our case the objectId
+                    options.sort = options.sort || {};
+                    let descending = false;
+                    if (options.sort.hasOwnProperty('_id') && options.sort['_id'] == -1) {
+                        descending = true;
+                    }
+                    // Select keys -> projection
+                    let select = keys.length > 0 ? "SPECIFIC_ATTRIBUTES" : "ALL_ATTRIBUTES";
+                    if (count) {
+                        select = "COUNT";
+                    }
+                    let _params = {
+                        TableName: this.database,
+                        KeyConditionExpression: '#className = :className',
+                        Select: select,
+                        ExpressionAttributeNames: {
+                            '#className': '_pk_className'
+                        },
+                        ExpressionAttributeValues: {
+                            ':className': this.className
+                        }
+                    };
+                    if (!count) {
+                        _params.Limit = limit;
+                    }
+                    if (Object.keys(query).length > 0) {
+                        let exp = new FilterExpression();
+                        exp = exp.build(query);
+                        _params.FilterExpression = exp.FilterExpression;
+                        _params.ExpressionAttributeNames = exp.ExpressionAttributeNames;
+                        _params.ExpressionAttributeValues = exp.ExpressionAttributeValues;
+                        _params.ExpressionAttributeNames['#className'] = '_pk_className';
+                        _params.ExpressionAttributeValues[':className'] = this.className;
+                    }
+                    if (descending) {
+                        _params.ScanIndexForward = descending;
+                    }
+                    if (keys.length > 0) {
+                        _params.ProjectionExpression = this._getProjectionExpression(keys, _params);
+                    }
+                    params = _params;
+                }
+                this.dynamo.query(params, (err, data) => {
+                    if (err) {
+                        reject(err);
+                    }
+                    else {
+                        results = results.concat(data.Items || []);
+                        if (data.LastEvaluatedKey && (results.length < options.limit)) {
+                            options.limit = options.limit - results.length;
+                            params.ExclusiveStartKey = data.LastEvaluatedKey;
+                            return _exec(query, options, params, results);
+                        }
+                        if (options.count) {
+                            resolve(data.Count ? data.Count : 0);
+                        }
+                        results.forEach((item) => {
+                            delete item._pk_className;
+                            delete item._sk_id;
+                        });
+                        resolve(results);
+                    }
+                });
+            };
+            _exec(query, options);
+        });
+    }
+    find(query = {}, options = {}) {
+        if (query.hasOwnProperty('_id') && typeof query['_id'] === 'string') {
+            let id = query['_id'];
+            let _keys = options.keys || {};
+            //delete _keys['_id'];
+            let keys = Object.keys(_keys);
+            return this._get(id, keys);
+        }
+        if (options.keys && options.keys['_id']) {
+            delete options.keys['_id'];
+        }
+        return this._query(query, options);
+    }
+    count(query = {}, options = {}) {
+        options.count = true;
+        return this._query(query, options);
+    }
+    insertOne(object) {
+        let id = object['_id'] || cryptoUtils_1.newObjectId();
+        let params = {
+            TableName: this.database,
+            Item: Object.assign({ _pk_className: this.className, _sk_id: id }, object)
+        };
+        return new Promise((resolve, reject) => {
+            this.dynamo.put(params, (err, data) => {
+                if (err) {
+                    reject(err);
+                }
+                else {
+                    resolve({
+                        ok: 1,
+                        n: 1,
+                        ops: [object],
+                        insertedId: id
+                    });
+                }
+            });
+        });
+    }
+    updateOne(query = {}, object) {
+        //console.log('UPDATE', query, object);
+        let id = query['_id'] || object['_id'];
+        let params = {
+            TableName: this.database,
+            Key: {
+                _pk_className: this.className
+            },
+            ReturnValues: 'ALL_NEW'
+        };
+        let find = Promise.resolve();
+        if (id) {
+            find = Promise.resolve(id);
+        }
+        else {
+            if (Object.keys(query).length > 0) {
+                find = this.find(query, { limit: 1 }).then(results => {
+                    if (results.length > 0 && results[0]._id) {
+                        return results[0]._id;
+                    }
+                    else {
+                        // create new object if not exist
+                        return cryptoUtils_1.newObjectId();
+                    }
+                });
+            }
+            else {
+                throw new node_1.Parse.Error(node_1.Parse.Error.INVALID_QUERY, 'DynamoDB : you must specify query keys');
+            }
+        }
+        delete object['_id'];
+        params.UpdateExpression = this._getUpdateExpression(object, params);
+        object = null; // destroy object;
+        return new Promise((resolve, reject) => {
+            find.then((id) => {
+                params.Key._sk_id = id;
+                //console.log('UPDATE PARAMS', params);
+                this.dynamo.update(params, (err, data) => {
+                    if (err) {
+                        reject(err);
+                    }
+                    else {
+                        if (data && data.Attributes) {
+                            delete data.Attributes._pk_className;
+                            delete data.Attributes._sk_id;
+                        }
+                        resolve({
+                            ok: 1,
+                            n: 1,
+                            nModified: 1,
+                            value: data.Attributes
+                        });
+                    }
+                });
+            });
+        });
+    }
+    upsertOne(query = {}, object) {
+        return this.updateOne(query, object);
+    }
+    updateMany(query = {}, object) {
+        let id = query['_id'] || object['_id'];
+        if (id) {
+            return this.updateOne(query, object);
+        }
+        else {
+            let options = {
+                limit: 25,
+                keys: { _id: 1 }
+            };
+            return this.find(query, options).then((res) => {
+                let params = {
+                    RequestItems: {}
+                };
+                params.RequestItems[this.database] = res.map(item => {
+                    return {
+                        PutRequest: {
+                            Item: Object.assign({ _pk_className: this.className, _sk_id: item._sk_id, _id: item._sk_id }, object)
+                        }
+                    };
+                });
+                return new Promise((resolve, reject) => {
+                    this.dynamo.batchWrite(params, (err, data) => {
+                        if (err) {
+                            reject(err);
+                        }
+                        else {
+                            resolve({
+                                ok: 1,
+                                n: (res || []).length
+                            });
+                        }
+                    });
+                });
+            });
+        }
+    }
+    deleteOne(query = {}) {
+        let id = query['_id'];
+        let params = {
+            TableName: this.database,
+            Key: {
+                _pk_className: this.className
+            }
+        };
+        let find = Promise.resolve();
+        if (id) {
+            find = Promise.resolve(id);
+        }
+        else {
+            if (Object.keys(query).length > 0) {
+                find = this.find(query, { limit: 1 }).then(results => {
+                    if (results.length > 0 && results[0]._id) {
+                        return results[0]._id;
+                    }
+                    else {
+                        return -1;
+                    }
+                });
+            }
+            else {
+                throw new node_1.Parse.Error(node_1.Parse.Error.INVALID_QUERY, 'DynamoDB : you must specify query keys');
+            }
+        }
+        return new Promise((resolve, reject) => {
+            find.then((id) => {
+                if (id == -1) {
+                    reject();
+                }
+                else {
+                    params.Key._sk_id = id;
+                    this.dynamo.delete(params, (err, data) => {
+                        if (err) {
+                            reject(err);
+                        }
+                        else {
+                            resolve({
+                                ok: 1,
+                                n: 1,
+                                deletedCount: 1
+                            });
+                        }
+                    });
+                }
+            });
+        });
+    }
+    deleteMany(query = {}) {
+        let id = query['_id'];
+        if (id) {
+            return this.deleteOne(query);
+        }
+        else {
+            let options = {
+                limit: 25,
+                keys: { _id: 1 }
+            };
+            return this.find(query, options).then((res) => {
+                let params = {
+                    RequestItems: {}
+                };
+                params.RequestItems[this.database] = res.map(item => {
+                    return {
+                        DeleteRequest: {
+                            Key: {
+                                _pk_className: item.className,
+                                _sk_id: item._id
+                            }
+                        }
+                    };
+                });
+                return new Promise((resolve, reject) => {
+                    this.dynamo.batchWrite(params, (err, data) => {
+                        if (err) {
+                            reject(err);
+                        }
+                        else {
+                            resolve({
+                                ok: 1,
+                                n: (res || []).length,
+                                deletedCount: (res || []).length
+                            });
+                        }
+                    });
+                });
+            });
+        }
+    }
+    _ensureSparseUniqueIndexInBackground(indexRequest) {
+        return Promise.resolve();
+    }
+    drop() {
+        return Promise.resolve();
+    }
+}
+exports.Partition = Partition;
