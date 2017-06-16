@@ -223,10 +223,18 @@ afterEach(function(done) {
     }, done);
     on_db('dynamodb', () => {
 	let exec = require('child_process').execSync;
-        let promise = Promise.resolve(exec('aws dynamodb delete-table --table-name parse-server --endpoint http://localhost:8000'));
-        promise.then(() => exec('aws dynamodb create-table --table-name parse-server --attribute-definitions AttributeName=_pk_className,AttributeType=S AttributeName=_sk_id,AttributeType=S --key-schema AttributeName=_pk_className,KeyType=HASH AttributeName=_sk_id,KeyType=RANGE --provisioned-throughput ReadCapacityUnits=5,WriteCapacityUnits=5 --endpoint-url http://localhost:8000'))
-               .then(() => done())
-               .catch(() => done())
+        try {
+	    Promise.then(() => {
+            	exec('aws dynamodb delete-table --table-name parse-server --endpoint http://localhost:8000');
+            }).then(() => {
+		return Promise.delay(100).then(() => {
+	    	    exec('aws dynamodb create-table --table-name parse-server --attribute-definitions AttributeName=_pk_className,AttributeType=S AttributeName=_sk_id,AttributeType=S --key-schema AttributeName=_pk_className,KeyType=HASH AttributeName=_sk_id,KeyType=RANGE --provisioned-throughput ReadCapacityUnits=5,WriteCapacityUnits=5 --endpoint-url http://localhost:8000');
+            	    done();
+	        });
+            });
+        } catch (error) {
+            done();
+        }
     }, done);
   };
   Parse.Cloud._removeAllHooks();
