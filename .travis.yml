@@ -37,6 +37,7 @@ before_script:
 - java -Djava.library.path=/tmp/DynamoDBLocal_lib -jar /tmp/DynamoDBLocal.jar -inMemory &
 - sudo pip install --upgrade pip
 - sudo pip install awscli
+- aws configure set region us-west-1
 - sleep 10
 after_script:
 - bash <(curl -s https://codecov.io/bash)
