@@ -639,7 +639,8 @@ export default class SchemaController {
         // condition where another client updated the schema in the same
         // way that we wanted to. So, just reload the schema
         return this.reloadData({ clearCache: true });
-      }).then(() => {
+      }).then((x) => {
+        //console.log('XXXXXXX', x);
         // Ensure that the schema now validates
         if (!dbTypeMatchesObjectType(this.getExpectedType(className, fieldName), type)) {
           throw new Parse.Error(Parse.Error.INVALID_JSON, `Could not add field ${fieldName}`);

@@ -122,10 +122,7 @@ class SchemaPartition extends DynamoPartition_1.Partition {
         return this.updateSchema(name, query, update);
     }
     addFieldIfNotExists(className, fieldName, type) {
-        let query = _mongoSchemaQueryFromNameQuery(className);
-        return this.upsertOne(query, {
-            [fieldName]: parseFieldTypeToMongoFieldType(type)
-        }).catch(error => { throw error; });
+        return this.upsertSchema(className, { [fieldName]: { '$exists': false } }, { '$set': { [fieldName]: parseFieldTypeToMongoFieldType(type) } });
     }
 }
 exports.SchemaPartition = SchemaPartition;

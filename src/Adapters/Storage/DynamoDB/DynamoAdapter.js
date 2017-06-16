@@ -164,13 +164,13 @@ class Adapter {
                 };
                 promise.then(() => {
                     // give time for deleting/creating the table!
-                    return Promise.delay(500).then(() => {
+                    return Promise.delay(150).then(() => {
                         return this.service.createTable(params, (err, data) => {
                             if (err) {
                                 reject();
                             }
                             else {
-                                return Promise.delay(500).then(() => {
+                                return Promise.delay(150).then(() => {
                                     resolve();
                                 });
                             }
@@ -293,7 +293,9 @@ class Adapter {
     }
     count(className, schema, query) {
         schema = Transform.convertParseSchemaToMongoSchema(schema);
-        return this._adaptiveCollection(className).count(Transform.transformWhere(className, query, schema))
+        query = Transform.transformWhere(className, query, schema);
+        query = this.transformDateObject(query);
+        return this._adaptiveCollection(className).count(query)
             .catch(error => { throw error; });
     }
     performInitialization() {
