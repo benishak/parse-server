@@ -36,7 +36,7 @@ before_script:
 - tar -xzf /tmp/dynamodb_local_latest.tar.gz -C /tmp
 - java -Djava.library.path=/tmp/DynamoDBLocal_lib -jar /tmp/DynamoDBLocal.jar -inMemory &
 - sudo pip install --upgrade pip
-- sudo pip install aws-cli
+- sudo pip install awscli
 - sleep 10
 after_script:
 - bash <(curl -s https://codecov.io/bash)
