@@ -21,6 +21,7 @@ cache:
   directories:
   - node_modules
   - /tmp
+  - ~/.aws
 
 # Test stage
 stage: test
@@ -38,6 +39,9 @@ before_script:
 - sudo pip install --upgrade pip
 - sudo pip install awscli
 - aws configure set region us-west-1
+- echo "[default]" > ~/.aws/credentials
+- echo "aws_access_key_id = key" >> ~/.aws/credentials
+- echo "aws_secret_access_key = secret" >> ~/.aws/credentials
 - sleep 10
 after_script:
 - bash <(curl -s https://codecov.io/bash)
