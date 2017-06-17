@@ -59,7 +59,15 @@ const a = new DDB('parse-server', {
 });
 
 databaseAdapter = a.getAdapter();
-//databaseAdapter.deleteAllClasses();
+startDB = () => {
+  let exec = require('child_process').execSync;
+  exec('./resources/start-dynamodb.sh');
+}
+
+stopDB = () => {
+  let exec = require('child_process').execSync;
+  exec('./resources/stop-dynamodb.sh');
+}
 
 } else {
   startDB = require('mongodb-runner/mocha/before').bind({
@@ -216,13 +224,14 @@ beforeEach(done => {
 afterEach(function(done) {
   const afterLogOut = () => {
     if (Object.keys(openConnections).length > 0) {
-      //fail('There were open connections to the server left after the test finished');
+      fail('There were open connections to the server left after the test finished');
     }
     on_db('postgres', () => {
       TestUtils.destroyAllDataPermanently().then(done, done);
     }, done);
     on_db('dynamodb', () => {
-	let exec = require('child_process').execSync;
+        TestUtils.destroyAllDataPermanently().then(done,done);
+	/*let exec = require('child_process').execSync;
         try {
 	    Promise.then(() => {
             	exec('aws dynamodb delete-table --table-name parse-server --endpoint http://localhost:8000');
@@ -234,7 +243,7 @@ afterEach(function(done) {
             });
         } catch (error) {
             done();
-        }
+        }*/
     }, done);
   };
   Parse.Cloud._removeAllHooks();

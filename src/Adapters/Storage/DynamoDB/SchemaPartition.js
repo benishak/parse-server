@@ -1,6 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-const DynamoPartition_1 = require("./DynamoPartition");
+const Partition_1 = require("./Partition");
 const nonFieldSchemaKeys = ['_id', '_metadata', '_client_permissions'];
 const emptyCLPS = Object.freeze({
     find: {},
@@ -96,7 +96,7 @@ function parseFieldTypeToMongoFieldType({ type, targetClass = null }) {
     }
 }
 exports.parseFieldTypeToMongoFieldType = parseFieldTypeToMongoFieldType;
-class SchemaPartition extends DynamoPartition_1.Partition {
+class SchemaPartition extends Partition_1.Partition {
     _fetchAllSchemasFrom_SCHEMA() {
         return this.find().then(schemas => schemas.map(mongoSchemaToParseSchema)).catch(error => { throw error; });
     }
@@ -114,12 +114,12 @@ class SchemaPartition extends DynamoPartition_1.Partition {
     findAndDeleteSchema(name) {
         return this.deleteOne({ _id: name });
     }
-    updateSchema(name, query, update) {
+    updateSchema(name, query, update, upsert = false) {
         let _query = _mongoSchemaQueryFromNameQuery(name, query);
-        return this.updateOne(_query, update);
+        return this.updateOne(_query, update, upsert);
     }
     upsertSchema(name, query, update) {
-        return this.updateSchema(name, query, update);
+        return this.updateSchema(name, query, update, true);
     }
     addFieldIfNotExists(className, fieldName, type) {
         return this.upsertSchema(className, { [fieldName]: { '$exists': false } }, { '$set': { [fieldName]: parseFieldTypeToMongoFieldType(type) } });

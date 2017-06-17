@@ -12,11 +12,11 @@ Object.defineProperty(exports, "__esModule", { value: true });
 const aws_sdk_1 = require("aws-sdk");
 const Promise = require("bluebird");
 const Transform = require("parse-server/lib/Adapters/Storage/Mongo/MongoTransform");
-const DynamoPartition_1 = require("./DynamoPartition");
+const Partition_1 = require("./Partition");
 const SchemaPartition_1 = require("./SchemaPartition");
 const node_1 = require("parse/node");
 const lodash_1 = require("lodash");
-const schemaTable = '_SCHEMA';
+const schemaPartition = '_SCHEMA';
 // not used at the moment but can be helpful in the future!
 const DynamoType = type => {
     switch (type.type) {
@@ -82,10 +82,10 @@ class Adapter {
         return Promise.resolve();
     }
     _adaptiveCollection(name) {
-        return new DynamoPartition_1.Partition(this.database, name, this.service);
+        return new Partition_1.Partition(this.database, name, this.service);
     }
     _schemaCollection() {
-        return new SchemaPartition_1.SchemaPartition(this.database, schemaTable, this.service);
+        return new SchemaPartition_1.SchemaPartition(this.database, schemaPartition, this.service);
     }
     classExists(name) {
         return this._schemaCollection().find({ _id: name }).then(partition => partition.length > 0).catch(error => { throw error; });
@@ -152,10 +152,9 @@ class Adapter {
             },
             TableName: this.database
         };
-        let exec = require('child_process').execSync;
         return new Promise((resolve, reject) => {
-            let promise;
             this.service.describeTable({ TableName: this.database }, (err, data) => {
+                let promise;
                 if (err) {
                     promise = Promise.resolve();
                 }
@@ -163,7 +162,7 @@ class Adapter {
                     promise = this.service.deleteTable({ TableName: this.database }).promise();
                 }
                 promise.then(() => {
-                    return Promise.delay(100);
+                    return Promise.delay(50);
                 }).catch(() => {
                     return Promise.resolve();
                 }).then(() => {
@@ -257,19 +256,19 @@ class Adapter {
         return this._adaptiveCollection(className).updateMany(query, update)
             .catch(error => { throw error; });
     }
-    findOneAndUpdate(className, schema, query, update) {
+    findOneAndUpdate(className, schema, query, update, upsert = false) {
         update = this.transformDateObject(update);
         schema = Transform.convertParseSchemaToMongoSchema(schema);
         update = Transform.transformUpdate(className, update, schema);
         update = this.transformDateObject(update);
         query = Transform.transformWhere(className, query, schema);
         query = this.transformDateObject(query);
-        return this._adaptiveCollection(className).updateOne(query, update)
+        return this._adaptiveCollection(className).updateOne(query, update, upsert)
             .then(result => Transform.mongoObjectToParseObject(className, result.value, schema))
             .catch(error => { throw error; });
     }
     upsertOneObject(className, schema, query, update) {
-        return this.findOneAndUpdate(className, schema, query, update);
+        return this.findOneAndUpdate(className, schema, query, update, true);
     }
     find(className, schema = {}, query = {}, options = {}) {
         let { skip, limit, sort, keys } = options;
