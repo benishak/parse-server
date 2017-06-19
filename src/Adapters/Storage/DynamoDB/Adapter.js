@@ -13,6 +13,7 @@ const aws_sdk_1 = require("aws-sdk");
 const Promise = require("bluebird");
 const Transform = require("parse-server/lib/Adapters/Storage/Mongo/MongoTransform");
 const Partition_1 = require("./Partition");
+const Cache_1 = require("./Cache");
 const SchemaPartition_1 = require("./SchemaPartition");
 const node_1 = require("parse/node");
 const lodash_1 = require("lodash");
@@ -88,12 +89,12 @@ class Adapter {
         return new SchemaPartition_1.SchemaPartition(this.database, schemaPartition, this.service);
     }
     classExists(name) {
-        return this._schemaCollection().find({ _id: name }).then(partition => partition.length > 0).catch(error => { throw error; });
+        return this._schemaCollection().find({ _id: name }).then(partition => partition.length > 0);
     }
     setClassLevelPermissions(className, CLPs) {
-        return this._schemaCollection().updateSchema(className, {}, {
-            _metadata: { class_permissions: CLPs }
-        }).catch(error => { throw error; });
+        return this._schemaCollection().updateSchema(className, {
+            $set: { _metadata: { class_permissions: CLPs } }
+        });
     }
     createClass(className, schema) {
         return this.classExists(className).then(partition => {
@@ -105,9 +106,7 @@ class Adapter {
                     .then(result => {
                     return SchemaPartition_1.mongoSchemaToParseSchema(result.ops[0]);
                 })
-                    .catch(error => {
-                    throw error;
-                });
+                    .catch(error => { throw new error; });
             }
             else {
                 throw new node_1.Parse.Error(node_1.Parse.Error.DUPLICATE_VALUE, 'Class already exists.');
@@ -115,13 +114,11 @@ class Adapter {
         }).catch(error => { throw error; });
     }
     addFieldIfNotExists(className, fieldName, type) {
-        return this._schemaCollection().addFieldIfNotExists(className, fieldName, type)
-            .catch(error => { throw error; });
+        return this._schemaCollection().addFieldIfNotExists(className, fieldName, type);
     }
     deleteClass(className) {
         // only drop Schema!
-        return this._schemaCollection().findAndDeleteSchema(className)
-            .catch(error => { throw error; });
+        return this._schemaCollection().findAndDeleteSchema(className);
     }
     deleteAllClasses() {
         // only for test
@@ -154,6 +151,7 @@ class Adapter {
         };
         return new Promise((resolve, reject) => {
             this.service.describeTable({ TableName: this.database }, (err, data) => {
+                Cache_1._Cache.flush();
                 let promise;
                 if (err) {
                     promise = Promise.resolve();
@@ -162,11 +160,11 @@ class Adapter {
                     promise = this.service.deleteTable({ TableName: this.database }).promise();
                 }
                 promise.then(() => {
-                    return Promise.delay(50);
+                    return Promise.delay(100);
                 }).catch(() => {
                     return Promise.resolve();
                 }).then(() => {
-                    return this.service.createTable(params, (err, data) => {
+                    this.service.createTable(params, (err, data) => {
                         if (err) {
                             reject();
                         }
@@ -186,15 +184,13 @@ class Adapter {
         fieldNames.forEach(field => {
             update[field] = undefined;
         });
-        return this._schemaCollection().updateSchema(name, { _id: name }, update)
-            .catch(error => { throw error; });
+        return this._schemaCollection().updateSchema(className, update);
     }
     getAllClasses() {
         return this._schemaCollection()._fetchAllSchemasFrom_SCHEMA();
     }
     getClass(className) {
-        return this._schemaCollection()._fechOneSchemaFrom_SCHEMA(className)
-            .catch(error => { throw error; });
+        return this._schemaCollection()._fetchOneSchemaFrom_SCHEMA(className);
     }
     transformDateObject(object = {}) {
         Object.keys(object).forEach(key => {
@@ -225,16 +221,20 @@ class Adapter {
         schema = Transform.convertParseSchemaToMongoSchema(schema);
         object = Transform.parseObjectToMongoObjectForCreate(className, object, schema);
         object = object = this.transformDateObject(object);
-        Object.keys(object).forEach(key => {
-            if (object[key] instanceof Date) {
-                object[key] = object[key].toISOString();
+        return this._adaptiveCollection(className).ensureUniqueness(object)
+            .then(count => {
+            if (count === 0) {
+                return this._adaptiveCollection(className).insertOne(object);
             }
-        });
-        return this._adaptiveCollection(className).insertOne(object)
+            else {
+                throw new node_1.Parse.Error(node_1.Parse.Error.DUPLICATE_VALUE, 'A duplicate value for a field with unique values was provided');
+            }
+        })
             .catch(error => { throw error; });
     }
     deleteObjectsByQuery(className, schema, query) {
         schema = Transform.convertParseSchemaToMongoSchema(schema);
+        query = this.transformDateObject(query);
         query = Transform.transformWhere(className, query, schema);
         query = this.transformDateObject(query);
         return this._adaptiveCollection(className).deleteMany(query)
@@ -251,9 +251,18 @@ class Adapter {
         schema = Transform.convertParseSchemaToMongoSchema(schema);
         update = Transform.transformUpdate(className, update, schema);
         update = this.transformDateObject(update);
+        query = this.transformDateObject(query);
         query = Transform.transformWhere(className, query, schema);
         query = this.transformDateObject(query);
-        return this._adaptiveCollection(className).updateMany(query, update)
+        return this._adaptiveCollection(className).ensureUniqueness(update['$set'])
+            .then(count => {
+            if (count === 0) {
+                return this._adaptiveCollection(className).updateMany(query, update);
+            }
+            else {
+                throw new node_1.Parse.Error(node_1.Parse.Error.DUPLICATE_VALUE, 'A duplicate value for a field with unique values was provided');
+            }
+        })
             .catch(error => { throw error; });
     }
     findOneAndUpdate(className, schema, query, update, upsert = false) {
@@ -261,9 +270,18 @@ class Adapter {
         schema = Transform.convertParseSchemaToMongoSchema(schema);
         update = Transform.transformUpdate(className, update, schema);
         update = this.transformDateObject(update);
+        query = this.transformDateObject(query);
         query = Transform.transformWhere(className, query, schema);
         query = this.transformDateObject(query);
-        return this._adaptiveCollection(className).updateOne(query, update, upsert)
+        return this._adaptiveCollection(className).ensureUniqueness(update['$set'])
+            .then(count => {
+            if (count === 0) {
+                return this._adaptiveCollection(className).updateOne(query, update, upsert);
+            }
+            else {
+                throw new node_1.Parse.Error(node_1.Parse.Error.DUPLICATE_VALUE, 'A duplicate value for a field with unique values was provided');
+            }
+        })
             .then(result => Transform.mongoObjectToParseObject(className, result.value, schema))
             .catch(error => { throw error; });
     }
@@ -273,6 +291,7 @@ class Adapter {
     find(className, schema = {}, query = {}, options = {}) {
         let { skip, limit, sort, keys } = options;
         schema = Transform.convertParseSchemaToMongoSchema(schema);
+        query = this.transformDateObject(query);
         query = Transform.transformWhere(className, query, schema);
         query = this.transformDateObject(query);
         sort = lodash_1._.mapKeys(sort, (value, fieldName) => Transform.transformKey(className, fieldName, schema));
@@ -281,24 +300,38 @@ class Adapter {
             return memo;
         }, {});
         return this._adaptiveCollection(className).find(query, { skip, limit, sort, keys })
-            .then(objects => objects.map(object => Transform.mongoObjectToParseObject(className, object, schema)))
-            .catch(error => { throw error; });
+            .then(objects => objects.map(object => Transform.mongoObjectToParseObject(className, object, schema)));
     }
     _rawFind(className, query = {}) {
         return this._adaptiveCollection(className).find(query)
             .catch(error => { throw error; });
     }
     ensureUniqueness(className, schema, fieldNames) {
-        return Promise.resolve();
+        fieldNames = fieldNames.map(fieldName => Transform.transformKey(className, fieldName, schema));
+        return new Promise((resolve, reject) => {
+            this._adaptiveCollection('_UNIQUE_INDEX_')
+                .upsertOne({ _id: className }, { $set: { fields: fieldNames } }).then(res => {
+                if (res.value) {
+                    Cache_1._Cache.put('UNIQUE', { [className]: fieldNames });
+                    resolve();
+                }
+                else {
+                    throw new node_1.Parse.Error(1, 'DynamoDB cannot create this Index');
+                }
+            }).catch(error => { throw error; });
+        });
     }
     count(className, schema, query) {
         schema = Transform.convertParseSchemaToMongoSchema(schema);
+        query = this.transformDateObject(query);
         query = Transform.transformWhere(className, query, schema);
         query = this.transformDateObject(query);
-        return this._adaptiveCollection(className).count(query)
-            .catch(error => { throw error; });
+        return this._adaptiveCollection(className).count(query);
     }
     performInitialization() {
+        return Promise.resolve();
+    }
+    createIndex(className, index) {
         return Promise.resolve();
     }
 }

@@ -100,26 +100,26 @@ class SchemaPartition extends Partition_1.Partition {
     _fetchAllSchemasFrom_SCHEMA() {
         return this.find().then(schemas => schemas.map(mongoSchemaToParseSchema)).catch(error => { throw error; });
     }
-    _fechOneSchemaFrom_SCHEMA(name) {
+    _fetchOneSchemaFrom_SCHEMA(name) {
         let query = _mongoSchemaQueryFromNameQuery(name);
         return this.find(query, { limit: 1 }).then(result => {
-            if (result) {
-                return mongoSchemaToParseSchema(result);
+            if (result.length === 1) {
+                return mongoSchemaToParseSchema(result[0]);
             }
             else {
-                return [];
+                throw undefined;
             }
         });
     }
     findAndDeleteSchema(name) {
         return this.deleteOne({ _id: name });
     }
-    updateSchema(name, query, update, upsert = false) {
-        let _query = _mongoSchemaQueryFromNameQuery(name, query);
-        return this.updateOne(_query, update, upsert);
+    updateSchema(name, update) {
+        let _query = _mongoSchemaQueryFromNameQuery(name);
+        return this.updateOne(_mongoSchemaQueryFromNameQuery(name), update);
     }
     upsertSchema(name, query, update) {
-        return this.updateSchema(name, query, update, true);
+        return this.upsertOne(_mongoSchemaQueryFromNameQuery(name, query), update);
     }
     addFieldIfNotExists(className, fieldName, type) {
         return this.upsertSchema(className, { [fieldName]: { '$exists': false } }, { '$set': { [fieldName]: parseFieldTypeToMongoFieldType(type) } });

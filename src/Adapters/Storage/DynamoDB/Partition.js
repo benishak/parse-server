@@ -8,6 +8,8 @@ const Promise = require("bluebird");
 const node_1 = require("parse/node");
 const cryptoUtils_1 = require("parse-server/lib/cryptoUtils");
 const Expression_1 = require("./Expression");
+const Cache_1 = require("./Cache");
+const lodash_1 = require("lodash");
 var u = require('util'); // for debugging;
 class Partition {
     constructor(database, className, service) {
@@ -91,11 +93,13 @@ class Partition {
                     if (Object.keys(query).length > 0) {
                         let exp = new Expression_1.Expression();
                         exp = exp.build(query);
-                        _params.FilterExpression = exp.Expression;
-                        _params.ExpressionAttributeNames = exp.ExpressionAttributeNames;
-                        _params.ExpressionAttributeValues = exp.ExpressionAttributeValues;
-                        _params.ExpressionAttributeNames['#className'] = '_pk_className';
-                        _params.ExpressionAttributeValues[':className'] = this.className;
+                        if (exp.Expression != '[first]') {
+                            _params.FilterExpression = exp.Expression;
+                            _params.ExpressionAttributeNames = exp.ExpressionAttributeNames;
+                            _params.ExpressionAttributeValues = exp.ExpressionAttributeValues;
+                            _params.ExpressionAttributeNames['#className'] = '_pk_className';
+                            _params.ExpressionAttributeValues[':className'] = this.className;
+                        }
                     }
                     if (descending) {
                         _params.ScanIndexForward = descending;
@@ -135,20 +139,75 @@ class Partition {
     }
     find(query = {}, options = {}) {
         let id = query['_id'];
-        if (id && typeof id === 'string' && !query.hasOwnProperty('_rperm') && !query.hasOwnProperty('acl')) {
+        if (id && typeof id === 'string' && !(query.hasOwnProperty('_rperm') || query.hasOwnProperty('acl'))) {
             let _keys = options.keys || {};
             let keys = Object.keys(_keys);
             return this._get(id, keys);
         }
-        delete query['_id']; // in case of malformated query
         return this._query(query, options);
     }
     count(query = {}, options = {}) {
         options.count = true;
         return this._query(query, options);
     }
+    ensureUniqueness(object) {
+        if (Object.keys(object || {}).length > 0 && Cache_1._Cache.get('UNIQUE')) {
+            return Cache_1._Cache.get('UNIQUE', this.className).then(value => {
+                if (value) {
+                    return Promise.resolve(value);
+                }
+                else {
+                    return this.relaodUniques();
+                }
+            }).then(uniques => {
+                if (uniques.length > 0) {
+                    uniques = lodash_1._.intersection(uniques, Object.keys(object));
+                    if (uniques.length > 0) {
+                        return this.count({
+                            $or: uniques.map(key => {
+                                return { [key]: object[key] };
+                            })
+                        });
+                    }
+                    else {
+                        return Promise.resolve(0);
+                    }
+                }
+                else {
+                    return Promise.resolve(0);
+                }
+            }).catch(error => {
+                throw error;
+            });
+        }
+        else {
+            return Promise.resolve(0);
+        }
+    }
+    relaodUniques() {
+        let params = {
+            TableName: this.database,
+            Key: {
+                _pk_className: '_UNIQUE_INDEX_',
+                _sk_id: this.className
+            },
+            ConsistentRead: true
+        };
+        return this.dynamo.get(params).promise().then(item => {
+            let uniques = [];
+            if (item && item['fields']) {
+                Cache_1._Cache.put('UNIQUE', { [this.className]: item['fields'] });
+                uniques = item['fields'];
+            }
+            else {
+                Cache_1._Cache.put('UNIQUE', { [this.className]: [] });
+            }
+            return Promise.resolve(uniques);
+        });
+    }
     insertOne(object) {
         let id = object['_id'] || cryptoUtils_1.newObjectId();
+        object['_id'] = id;
         let params = {
             TableName: this.database,
             Item: Object.assign({ _pk_className: this.className, _sk_id: id }, object)
@@ -159,19 +218,16 @@ class Partition {
                     reject(err);
                 }
                 else {
-                    resolve({
-                        ok: 1,
-                        n: 1,
-                        ops: [object],
-                        insertedId: id
-                    });
+                    resolve({ ok: 1, n: 1, ops: [object], insertedId: id });
                 }
             });
         });
     }
+    // update in DynamoDB is upsert by default but if used with ConditionExpression, it will fail
+    // if upsert is true, try to find the item 
     updateOne(query = {}, object, upsert = false) {
         //console.log('UPDATE', query, object);
-        let id = query['_id'] || object['_id'];
+        let id = query['_id'];
         let params = {
             TableName: this.database,
             Key: {
@@ -181,7 +237,13 @@ class Partition {
         };
         let find = Promise.resolve();
         if (id) {
-            find = Promise.resolve(id);
+            query['_sk_id'] = id;
+            find = this._get(id, ['_sk_id', '_id']).then(result => {
+                if (result.length > 0 && result[0]._id === id) {
+                    return result[0]._id;
+                }
+                return null;
+            });
         }
         else {
             if (Object.keys(query).length > 0) {
@@ -189,55 +251,66 @@ class Partition {
                     if (results.length > 0 && results[0]._id) {
                         return results[0]._id;
                     }
-                    else {
-                        // create new object if not exist
-                        return cryptoUtils_1.newObjectId();
-                    }
+                    return null;
                 });
-                if (!upsert) {
-                    let exp = new Expression_1.Expression();
-                    exp = exp.build(query);
-                    params.ConditionExpression = exp.Expression;
-                    params.ExpressionAttributeNames = exp.ExpressionAttributeNames;
-                    params.ExpressionAttributeValues = exp.ExpressionAttributeValues;
-                }
             }
             else {
                 throw new node_1.Parse.Error(node_1.Parse.Error.INVALID_QUERY, 'DynamoDB : you must specify query keys');
             }
         }
+        let exp = new Expression_1.Expression();
+        exp = exp.build(query);
+        params.ConditionExpression = exp.Expression;
+        params.ExpressionAttributeNames = exp.ExpressionAttributeNames;
+        params.ExpressionAttributeValues = exp.ExpressionAttributeValues;
         params.UpdateExpression = Expression_1.Expression.getUpdateExpression(object, params);
-        object = null; // destroy object;
         return new Promise((resolve, reject) => {
             find.then((id) => {
-                params.Key._sk_id = id;
-                //console.log('UPDATE PARAMS', params);
-                this.dynamo.update(params, (err, data) => {
-                    if (err) {
-                        if (err.name == 'ConditionalCheckFailedException') {
-			    //reject(new Parse.Error(Parse.Error.OBJECT_NOT_FOUND, 'Object not found'));
-                            console.log('fuck', err.name);
-                            resolve({ ok : 1, n : 0, nModified : 0, value : null });
-                        } else { reject(err); }
+                if (id) {
+                    params.Key._sk_id = id;
+                    //console.log('UPDATE PARAMS', params);
+                    this.dynamo.update(params, (err, data) => {
+                        if (err) {
+                            if (err.name == 'ConditionalCheckFailedException') {
+                                resolve({ ok: 1, n: 0, nModified: 0, value: null });
+                                //reject(new Parse.Error(Parse.Error.OBJECT_NOT_FOUND, 'Object not found'));
+                            }
+                            else {
+                                reject(err);
+                            }
+                        }
+                        else {
+                            if (data && data.Attributes) {
+                                data.Attributes._id = data.Attributes._sk_id;
+                                delete data.Attributes._pk_className;
+                                delete data.Attributes._sk_id;
+                                resolve({ ok: 1, n: 1, nModified: 1, value: data.Attributes });
+                            }
+                            else {
+                                resolve({ ok: 1, n: 1, nModified: 1, value: null });
+                            }
+                        }
+                    });
+                }
+                else {
+                    // here we do upserting
+                    if (upsert) {
+                        object = Object.assign({}, object['$set'], object['$inc']);
+                        object['_id'] = cryptoUtils_1.newObjectId();
+                        this.insertOne(object).then(res => resolve({ ok: 1, n: 1, nModified: 1, value: res.ops[0] }));
                     }
                     else {
-                        if (data && data.Attributes) {
-                            data.Attributes._id = data.Attributes._sk_id;
-                            delete data.Attributes._pk_className;
-                            delete data.Attributes._sk_id;
-                        }
-			//console.log('UPDATE Result', data.Attributes);
-                        resolve({ ok: 1, n: 1, nModified: 1, value: data.Attributes });
+                        resolve({ ok: 1, n: 1, nModified: 1, value: null });
                     }
-                });
+                }
             });
         });
     }
     upsertOne(query = {}, object) {
-        return this.updateOne(query, object);
+        return this.updateOne(query, object, true);
     }
     updateMany(query = {}, object) {
-        let id = query['_id'] || object['_id'];
+        let id = query['_id'];
         if (id) {
             return this.updateOne(query, object);
         }
@@ -249,29 +322,20 @@ class Partition {
                 res = res.filter(item => item._id != undefined);
                 if (res.length === 0)
                     throw new node_1.Parse.Error(node_1.Parse.Error.INVALID_QUERY, 'DynamoDB : cannot delete nothing');
-                let promises = [];
-                let params = {
-                    RequestItems: {},
-                };
-                params.RequestItems[this.database] = res.map(item => {
-                    return {
-                        PutRequest: {
-                            Item: Object.assign({ _pk_className: this.className, _sk_id: item._id, _id: item._id }, object)
-                        }
-                    };
-                });
+                let promises = res.map(item => this.updateOne({ _id: item._id }, object));
                 return new Promise((resolve, reject) => {
-                    this.dynamo.batchWrite(params, (err, data) => {
-                        if (err) {
-                            reject(err);
+                    Promise.all(promises).then(res => {
+                        res = res.filter(item => {
+                            if (res.value)
+                                return res.value;
+                        });
+                        if (res.length > 0) {
+                            resolve(res);
                         }
                         else {
-                            resolve({
-                                ok: 1,
-                                n: (res || []).length
-                            });
+                            resolve(null);
                         }
-                    });
+                    }).catch(err => reject(err));
                 });
             });
         }
@@ -317,17 +381,16 @@ class Partition {
                     params.Key._sk_id = id;
                     this.dynamo.delete(params, (err, data) => {
                         if (err) {
-                            if (err.name == 'ConditionalCheckFailedException')
-                                reject(new node_1.Parse.Error(node_1.Parse.Error.OBJECT_NOT_FOUND, 'Object not found'));
-                            else
+                            if (err.name == 'ConditionalCheckFailedException') {
+                                //reject(new Parse.Error(Parse.Error.OBJECT_NOT_FOUND, 'Object not found'));
+                                resolve({ ok: 1, n: 0, deletedCount: 0 });
+                            }
+                            else {
                                 reject(err);
+                            }
                         }
                         else {
-                            resolve({
-                                ok: 1,
-                                n: 1,
-                                deletedCount: 1
-                            });
+                            resolve({ ok: 1, n: 1, deletedCount: 1 });
                         }
                     });
                 }
@@ -347,33 +410,10 @@ class Partition {
             return this.find(query, options).then((res) => {
                 res = res.filter(item => item._id != undefined);
                 if (res.length === 0)
-                    throw new node_1.Parse.Error(node_1.Parse.Error.INVALID_QUERY, 'DynamoDB : cannot delete nothing');
-                let params = {
-                    RequestItems: {}
-                };
-                params.RequestItems[this.database] = res.map(item => {
-                    return {
-                        DeleteRequest: {
-                            Key: {
-                                _pk_className: this.className,
-                                _sk_id: item._id
-                            }
-                        }
-                    };
-                });
+                    throw new node_1.Parse.Error(node_1.Parse.Error.INTERNAL_SERVER_ERROR, 'DynamoDB : cannot delete nothing');
+                let promises = res.map(item => this.deleteOne({ _id: item._id }));
                 return new Promise((resolve, reject) => {
-                    this.dynamo.batchWrite(params, (err, data) => {
-                        if (err) {
-                            reject(err);
-                        }
-                        else {
-                            resolve({
-                                ok: 1,
-                                n: (res || []).length,
-                                deletedCount: (res || []).length
-                            });
-                        }
-                    });
+                    Promise.all(promises).then(res => resolve({ ok: 1, n: res.length, deletedCount: res.length })).catch(err => { throw new node_1.Parse.Error(node_1.Parse.Error.INTERNAL_SERVER_ERROR, 'DynamoDB : Internal Error'); });
                 });
             });
         }

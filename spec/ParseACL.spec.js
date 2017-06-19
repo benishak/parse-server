@@ -767,11 +767,13 @@ describe('Parse.ACL', () => {
   it("acl sharing with another user and get", (done) => {
     // Sign in as Bob.
     Parse.User.signUp("bob", "pass", null, {
+      error: function(e) { console.log('1', e) },
       success: function(bob) {
         Parse.User.logOut()
         .then(() => {
           // Sign in as Alice.
           Parse.User.signUp("alice", "wonderland", null, {
+	    error: function(e) { console.log('2', e) },
             success: function(alice) {
               // Create an object shared by Bob and Alice.
               var object = new TestObject();
@@ -780,6 +782,7 @@ describe('Parse.ACL', () => {
               acl.setReadAccess(bob, true);
               object.setACL(acl);
               object.save(null, {
+		error: function(e) { console.log('3', e) },
                 success: function() {
                   equal(object.getACL().getReadAccess(alice), true);
                   equal(object.getACL().getWriteAccess(alice), true);
@@ -797,7 +800,8 @@ describe('Parse.ACL', () => {
                           ok(result);
                           equal(result.id, object.id);
                           done();
-                        }
+                        },
+			error: function(e) { console.log('4', e) }
                       });
                     }
                   });
@@ -953,11 +957,13 @@ describe('Parse.ACL', () => {
   it("acl sharing with another user and public get", (done) => {
     // Sign in as Bob.
     Parse.User.signUp("bob", "pass", null, {
+	error: function(error) { console.log('1', error) },	
       success: function(bob) {
         Parse.User.logOut()
         .then(() => {
           // Sign in as Alice.
           Parse.User.signUp("alice", "wonderland", null, {
+		error: function(error) { console.log('2', error) },
             success: function(alice) {
               // Create an object shared by Bob and Alice.
               var object = new TestObject();
@@ -966,6 +972,7 @@ describe('Parse.ACL', () => {
               acl.setReadAccess(bob, true);
               object.setACL(acl);
               object.save(null, {
+		error: function(error) { console.log('3', error) },
                 success: function() {
                   equal(object.getACL().getReadAccess(alice), true);
                   equal(object.getACL().getWriteAccess(alice), true);
@@ -1248,7 +1255,6 @@ describe('Parse.ACL', () => {
         var user = req.object;
         var acl = new Parse.ACL(user);
         user.setACL(acl);
-        console.log('IN AFTER SAVE!');
         user.save(null, {useMasterKey: true}).then(user => {
           new Parse.Query('_User').get(user.objectId).then(() => {
             fail('should not have fetched user without public read enabled');
