@@ -9,6 +9,7 @@ const node_1 = require("parse/node");
 const cryptoUtils_1 = require("parse-server/lib/cryptoUtils");
 const Expression_1 = require("./Expression");
 const Cache_1 = require("./Cache");
+const helpers_1 = require("./helpers");
 const lodash_1 = require("lodash");
 var u = require('util'); // for debugging;
 class Partition {
@@ -129,6 +130,14 @@ class Partition {
                             delete item._pk_className;
                             delete item._sk_id;
                         });
+                        if (results.length > 1 && Object.keys(options.sort).length > 1) {
+                            delete options.sort['_id'];
+                            delete options.sort['_sk_id'];
+                            results = lodash_1._.orderBy(results, Object.keys(options.sort), helpers_1.$.values(options.sort).map((k) => { if (k == 1)
+                                return 'asc';
+                            else
+                                return 'desc'; }));
+                        }
                         //console.log('QUERY RESULT', this.className, u.inspect(results, false, null))
                         resolve(results);
                     }
@@ -273,7 +282,6 @@ class Partition {
                         if (err) {
                             if (err.name == 'ConditionalCheckFailedException') {
                                 resolve({ ok: 1, n: 0, nModified: 0, value: null });
-                                //reject(new Parse.Error(Parse.Error.OBJECT_NOT_FOUND, 'Object not found'));
                             }
                             else {
                                 reject(err);
@@ -321,7 +329,7 @@ class Partition {
             return this.find(query, options).then((res) => {
                 res = res.filter(item => item._id != undefined);
                 if (res.length === 0)
-                    throw new node_1.Parse.Error(node_1.Parse.Error.INVALID_QUERY, 'DynamoDB : cannot delete nothing');
+                    throw new node_1.Parse.Error(node_1.Parse.Error.INVALID_QUERY, 'DynamoDB : cannot update nothing');
                 let promises = res.map(item => this.updateOne({ _id: item._id }, object));
                 return new Promise((resolve, reject) => {
                     Promise.all(promises).then(res => {
@@ -382,7 +390,6 @@ class Partition {
                     this.dynamo.delete(params, (err, data) => {
                         if (err) {
                             if (err.name == 'ConditionalCheckFailedException') {
-                                //reject(new Parse.Error(Parse.Error.OBJECT_NOT_FOUND, 'Object not found'));
                                 resolve({ ok: 1, n: 0, deletedCount: 0 });
                             }
                             else {
@@ -410,10 +417,10 @@ class Partition {
             return this.find(query, options).then((res) => {
                 res = res.filter(item => item._id != undefined);
                 if (res.length === 0)
-                    throw new node_1.Parse.Error(node_1.Parse.Error.INTERNAL_SERVER_ERROR, 'DynamoDB : cannot delete nothing');
+                    throw new node_1.Parse.Error(node_1.Parse.Error.OBJECT_NOT_FOUND, 'Object not found');
                 let promises = res.map(item => this.deleteOne({ _id: item._id }));
                 return new Promise((resolve, reject) => {
-                    Promise.all(promises).then(res => resolve({ ok: 1, n: res.length, deletedCount: res.length })).catch(err => { throw new node_1.Parse.Error(node_1.Parse.Error.INTERNAL_SERVER_ERROR, 'DynamoDB : Internal Error'); });
+                    Promise.all(promises).then(res => resolve({ ok: 1, n: res.length, deletedCount: res.length })).catch(() => { throw new node_1.Parse.Error(node_1.Parse.Error.INTERNAL_SERVER_ERROR, 'DynamoDB : Internal Error'); });
                 });
             });
         }

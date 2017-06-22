@@ -1,6 +1,7 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 const Promise = require("bluebird");
+const lodash_1 = require("lodash");
 // durable cache no ttl!
 class Cache {
     constructor() {
@@ -11,7 +12,9 @@ class Cache {
             this.cache[key] = value;
         }
         else if (this.cache[key].constructor === Array) {
-            this.cache[key] = this.cache[key].concat(value);
+            if ((value instanceof Array))
+                value = [value];
+            this.cache[key] = lodash_1._.union(this.cache[key], value);
         }
         else if (this.cache[key].constructor === Object) {
             this.cache[key] = Object.assign(this.cache[key], value);

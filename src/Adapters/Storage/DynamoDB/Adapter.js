@@ -73,6 +73,18 @@ Transform.mongoSchemaFromFieldsAndClassNameAndCLP = (fields, className, classLev
     }
     return mongoObject;
 };
+Transform.transformToParseObject = (className, mongoObject, schema) => {
+    const object = Transform.mongoObjectToParseObject(className, mongoObject, schema);
+    Object.keys(schema.fields || {}).forEach(k => {
+        if (schema.fields[k].type == 'Date' && typeof object[k] == 'string') {
+            object[k] = node_1.Parse._encode(new Date(object[k]));
+        }
+    });
+    if (className == '_User' && object['_password_changed_at']) {
+        object['_password_changed_at'] = node_1.Parse._encode(new Date(object['_password_changed_at']));
+    }
+    return object;
+};
 class Adapter {
     constructor(database, settings) {
         this.database = database,
@@ -149,33 +161,23 @@ class Adapter {
             },
             TableName: this.database
         };
-        return new Promise((resolve, reject) => {
-            this.service.describeTable({ TableName: this.database }, (err, data) => {
-                Cache_1._Cache.flush();
-                let promise;
-                if (err) {
-                    promise = Promise.resolve();
-                }
-                else {
-                    promise = this.service.deleteTable({ TableName: this.database }).promise();
-                }
-                promise.then(() => {
-                    return Promise.delay(100);
-                }).catch(() => {
-                    return Promise.resolve();
-                }).then(() => {
-                    this.service.createTable(params, (err, data) => {
-                        if (err) {
-                            reject();
-                        }
-                        else {
-                            Promise.delay(100).then(() => {
-                                resolve();
-                            });
-                        }
-                    });
+        return Cache_1._Cache.flush().then(() => {
+            return this.service.describeTable({ TableName: this.database }).promise();
+        }).then(() => {
+            return this.service.scan({ TableName: this.database, AttributesToGet: ['_pk_className', '_sk_id'] }).promise();
+        }).then((data) => {
+            if (data.Items.length > 0) {
+                return Promise.reduce(data.Items, (acc, item) => {
+                    return this.service.deleteItem({ TableName: this.database, Key: item }).promise();
                 });
-            });
+            }
+            else {
+                return Promise.resolve();
+            }
+        }).then(() => {
+            return Promise.resolve();
+        }).catch((err) => {
+            Promise.reject(err);
         });
     }
     deleteFields(className, schema, fieldNames) {
@@ -282,7 +284,7 @@ class Adapter {
                 throw new node_1.Parse.Error(node_1.Parse.Error.DUPLICATE_VALUE, 'A duplicate value for a field with unique values was provided');
             }
         })
-            .then(result => Transform.mongoObjectToParseObject(className, result.value, schema))
+            .then(result => Transform.transformToParseObject(className, result.value, schema))
             .catch(error => { throw error; });
     }
     upsertOneObject(className, schema, query, update) {
@@ -300,7 +302,7 @@ class Adapter {
             return memo;
         }, {});
         return this._adaptiveCollection(className).find(query, { skip, limit, sort, keys })
-            .then(objects => objects.map(object => Transform.mongoObjectToParseObject(className, object, schema)));
+            .then(objects => objects.map(object => Transform.transformToParseObject(className, object, schema)));
     }
     _rawFind(className, query = {}) {
         return this._adaptiveCollection(className).find(query)

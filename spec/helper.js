@@ -199,10 +199,13 @@ beforeEach(done => {
       throw error;
     }
   }
-  TestUtils.destroyAllDataPermanently()
-  .catch(error => {
+  const execSync = require('child_process').execSync;
+    TestUtils.destroyAllDataPermanently().then(() => Promise.resolve(execSync('node ./resources/aws-dynamodb-truncate/index.js parse-server')))
+    .catch(error => {
     // For tests that connect to their own mongo, there won't be any data to delete.
     if (error.message === 'ns not found' || error.message.startsWith('connect ECONNREFUSED')) {
+      return;
+    } else if (error.name.startsWith('Resource')) {
       return;
     } else {
       fail(error);
@@ -231,7 +234,9 @@ afterEach(function(done) {
       TestUtils.destroyAllDataPermanently().then(done, done);
     }, done);
     on_db('dynamodb', () => { //done();
-       TestUtils.destroyAllDataPermanently().then(done, done);
+         //TestUtils.destroyAllDataPermanently().then(done, done);
+         const execSync = require('child_process').execSync;
+         TestUtils.destroyAllDataPermanently().then(() => Promise.resolve(execSync('node ./resources/aws-dynamodb-truncate/index.js parse-server'))).then(done).catch(done);
     }, done);
   };
   Parse.Cloud._removeAllHooks();
