@@ -2,7 +2,10 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 const node_1 = require("parse/node");
 const helpers_1 = require("./helpers");
+const aws_sdk_1 = require("aws-sdk");
+const lodash_1 = require("lodash");
 var u = require('util'); // for debugging;
+const dynamo = new aws_sdk_1.DynamoDB.DocumentClient();
 // helper class to generate DynamoDB FilterExpression from MongoDB Query Object
 class Expression {
     constructor() {
@@ -109,14 +112,47 @@ class Expression {
         if (!_params.ExpressionAttributeValues) {
             _params.ExpressionAttributeValues = {};
         }
-        let $set = {}, $unset = [], $inc = {};
-        let _set = [], _unset = [], _inc = [];
+        let $set = {}, $unset = [], $inc = {}, $append = {}, $del = {};
+        let _set = [], _unset = [], _del = [];
         let exp;
         Object.keys(object || {}).forEach(_op => {
             switch (_op) {
+                case '$push':
+                case '$addToSet':
+                    for (let key in (object[_op] || {})) {
+                        let o = object[_op][key] || {};
+                        if (lodash_1._.intersection(Object.keys(o), ['$slice', '$position']).length > 0)
+                            throw new node_1.Parse.Error(node_1.Parse.Error.INVALID_QUERY, 'DynamoDB cannot do this operation');
+                        if (o['$each']) {
+                            let list = o['$each'] || [];
+                            const sort = o['$sort'] || {};
+                            if (Object.keys(sort).length > 0 && list.constructor === Object) {
+                                list = lodash_1._.orderBy(list, Object.keys(sort), helpers_1.$.values(sort).map((k) => { if (k == 1)
+                                    return 'asc';
+                                else
+                                    return 'desc'; }));
+                            }
+                            o = _op == '$addToSet' ? lodash_1._.uniq(list) : list;
+                        }
+                        else {
+                            if (!(o instanceof Array)) {
+                                o = [].push(object[_op]);
+                            }
+                        }
+                        object[_op][key] = o;
+                    }
+                    $append = object[_op];
+                    _params.ExpressionAttributeValues[':__void__'] = [];
+                    delete $append['_id'];
+                    delete $append['_sk_id'];
+                    delete $append['_pk_className'];
+                    break;
+                case '$pullAll':
+                    $del = object[_op] || {};
+                    break;
                 case '$setOnInsert':
                 case '$set':
-                    $set = object['$set'] || {};
+                    $set = object[_op] || {};
                     delete $set['_id'];
                     delete $set['_sk_id'];
                     delete $set['_pk_className'];
@@ -139,10 +175,14 @@ class Expression {
                 case '$max':
                 case '$rename':
                 case '$currentDate':
-                case '$each':
-                case '$sort':
-                case '$slice':
-                case '$position':
+                    for (let key in (object[_op] || {})) {
+                        object[key] = (new Date()).toISOString();
+                    }
+                    $set = Object.assign($set || {}, object[_op]);
+                    delete $set['_id'];
+                    delete $set['_sk_id'];
+                    delete $set['_pk_className'];
+                    break;
                 case '$bit':
                 case '$isolated':
                     throw new node_1.Parse.Error(node_1.Parse.Error.INVALID_QUERY, 'DynamoDB : [' + _op + '] not supported on update');
@@ -175,6 +215,24 @@ class Expression {
                 _set.push(exp);
             }
         });
+        Object.keys($append).forEach(key => {
+            if ($append[key] != undefined) {
+                let keys = Expression.transformPath(_params, key, $append[key]);
+                let exp = '[key] = list_append(if_not_exists([key],:__void__),[value])';
+                exp = exp.replace(/\[key\]/g, keys);
+                exp = exp.replace('[value]', _params._v);
+                _set.push(exp);
+            }
+        });
+        Object.keys($del).forEach(key => {
+            if ($del[key] != undefined) {
+                let keys = Expression.transformPath(_params, key, dynamo.createSet($del[key]));
+                let exp = '[key] [value]';
+                exp = exp.replace(/\[key\]/g, keys);
+                exp = exp.replace('[value]', _params._v);
+                _del.push(exp);
+            }
+        });
         _unset = _unset.concat(Object.keys($unset).map(key => Expression.transformPath(_params, key)));
         if (_set.length > 0) {
             if (exp) {
@@ -190,6 +248,14 @@ class Expression {
             }
             else {
                 exp = 'REMOVE ' + _unset.join(', ');
+            }
+        }
+        if (_del.length > 0) {
+            if (exp) {
+                exp = exp + ' DELETE ' + _del.join(', ');
+            }
+            else {
+                exp = 'DELETE ' + _del.join(', ');
             }
         }
         delete _params._v;

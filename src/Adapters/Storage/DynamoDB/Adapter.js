@@ -75,13 +75,20 @@ Transform.mongoSchemaFromFieldsAndClassNameAndCLP = (fields, className, classLev
 };
 Transform.transformToParseObject = (className, mongoObject, schema) => {
     const object = Transform.mongoObjectToParseObject(className, mongoObject, schema);
-    Object.keys(schema.fields || {}).forEach(k => {
-        if (schema.fields[k].type == 'Date' && typeof object[k] == 'string') {
-            object[k] = node_1.Parse._encode(new Date(object[k]));
+    if (object instanceof Object) {
+        Object.keys(schema.fields || {}).forEach(k => {
+            if (schema.fields[k].type == 'Date' && typeof object[k] == 'string') {
+                object[k] = node_1.Parse._encode(new Date(object[k]));
+            }
+        });
+        if (className == '_User') {
+            if (object['_password_changed_at']) {
+                object['_password_changed_at'] = node_1.Parse._encode(new Date(object['_password_changed_at']));
+            }
+            if (object['_email_verify_token_expires_at']) {
+                object['_email_verify_token_expires_at'] = node_1.Parse._encode(new Date(object['_email_verify_token_expires_at']));
+            }
         }
-    });
-    if (className == '_User' && object['_password_changed_at']) {
-        object['_password_changed_at'] = node_1.Parse._encode(new Date(object['_password_changed_at']));
     }
     return object;
 };
