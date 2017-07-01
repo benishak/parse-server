@@ -130,13 +130,14 @@ class Partition {
                             delete item._pk_className;
                             delete item._sk_id;
                         });
-                        if (results.length > 1 && Object.keys(options.sort).length > 1) {
-                            delete options.sort['_id'];
-                            delete options.sort['_sk_id'];
+                        if (results.length > 1 && Object.keys(options.sort).length > 0) {
+                            console.log('sort', options.sort);
+                            console.log('res', results);
                             results = lodash_1._.orderBy(results, Object.keys(options.sort), helpers_1.$.values(options.sort).map((k) => { if (k == 1)
                                 return 'asc';
                             else
                                 return 'desc'; }));
+                            console.log('QUERY RESULT', this.className, u.inspect(results, false, null));
                         }
                         //console.log('QUERY RESULT', this.className, u.inspect(results, false, null))
                         resolve(results);
