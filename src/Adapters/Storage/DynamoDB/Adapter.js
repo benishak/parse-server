@@ -77,7 +77,7 @@ Transform.transformToParseObject = (className, mongoObject, schema) => {
     const object = Transform.mongoObjectToParseObject(className, mongoObject, schema);
     if (object instanceof Object) {
         Object.keys(schema.fields || {}).forEach(k => {
-            if (schema.fields[k].type == 'Date' && typeof object[k] == 'string') {
+            if ((schema.fields[k].type || '').toLowerCase() == 'date' && typeof object[k] == 'string' && ['createdAt', 'updatedAt'].indexOf(k) == -1) {
                 object[k] = node_1.Parse._encode(new Date(object[k]));
             }
         });
@@ -226,7 +226,6 @@ class Adapter {
         return object;
     }
     createObject(className, schema, object) {
-        object = this.transformDateObject(object);
         schema = Transform.convertParseSchemaToMongoSchema(schema);
         object = Transform.parseObjectToMongoObjectForCreate(className, object, schema);
         object = object = this.transformDateObject(object);
@@ -243,7 +242,6 @@ class Adapter {
     }
     deleteObjectsByQuery(className, schema, query) {
         schema = Transform.convertParseSchemaToMongoSchema(schema);
-        query = this.transformDateObject(query);
         query = Transform.transformWhere(className, query, schema);
         query = this.transformDateObject(query);
         return this._adaptiveCollection(className).deleteMany(query)
@@ -256,11 +254,9 @@ class Adapter {
             .catch(error => { throw error; });
     }
     updateObjectsByQuery(className, schema, query, update) {
-        update = this.transformDateObject(update);
         schema = Transform.convertParseSchemaToMongoSchema(schema);
         update = Transform.transformUpdate(className, update, schema);
         update = this.transformDateObject(update);
-        query = this.transformDateObject(query);
         query = Transform.transformWhere(className, query, schema);
         query = this.transformDateObject(query);
         return this._adaptiveCollection(className).ensureUniqueness(update['$set'])
@@ -275,11 +271,9 @@ class Adapter {
             .catch(error => { throw error; });
     }
     findOneAndUpdate(className, schema, query, update, upsert = false) {
-        update = this.transformDateObject(update);
         schema = Transform.convertParseSchemaToMongoSchema(schema);
         update = Transform.transformUpdate(className, update, schema);
         update = this.transformDateObject(update);
-        query = this.transformDateObject(query);
         query = Transform.transformWhere(className, query, schema);
         query = this.transformDateObject(query);
         return this._adaptiveCollection(className).ensureUniqueness(update['$set'])
@@ -295,12 +289,25 @@ class Adapter {
             .catch(error => { throw error; });
     }
     upsertOneObject(className, schema, query, update) {
-        return this.findOneAndUpdate(className, schema, query, update, true);
+        schema = Transform.convertParseSchemaToMongoSchema(schema);
+        update = Transform.transformUpdate(className, update, schema);
+        update = this.transformDateObject(update);
+        query = Transform.transformWhere(className, query, schema);
+        query = this.transformDateObject(query);
+        return this._adaptiveCollection(className).ensureUniqueness(update['$set'])
+            .then(count => {
+            if (count === 0) {
+                return this._adaptiveCollection(className).upsertOne(query, update);
+            }
+            else {
+                throw new node_1.Parse.Error(node_1.Parse.Error.DUPLICATE_VALUE, 'A duplicate value for a field with unique values was provided');
+            }
+        })
+            .catch(error => { throw error; });
     }
     find(className, schema = {}, query = {}, options = {}) {
         let { skip, limit, sort, keys } = options;
         schema = Transform.convertParseSchemaToMongoSchema(schema);
-        query = this.transformDateObject(query);
         query = Transform.transformWhere(className, query, schema);
         query = this.transformDateObject(query);
         sort = lodash_1._.mapKeys(sort, (value, fieldName) => Transform.transformKey(className, fieldName, schema));

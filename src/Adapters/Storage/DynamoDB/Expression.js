@@ -264,7 +264,6 @@ class Expression {
                             lodash_1._.pull(value, item);
                         }
                     });
-                    console.log('VALUE', value, $del[path]);
                     lodash_1._.set(original, path, value);
                     path = path.split('.')[0];
                     path = Expression.transformPath(_params, path, original[path]);
@@ -293,7 +292,6 @@ class Expression {
             }
         }
         delete _params._v;
-        //console.log('UPDATE EXPRESSION', exp);
         return exp;
     }
     createExpression(key, value, op, not = false, _all = false) {
