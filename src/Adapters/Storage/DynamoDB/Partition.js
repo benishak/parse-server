@@ -246,19 +246,23 @@ class Partition {
         };
         let find = Promise.resolve();
         if (id) {
-            query['_sk_id'] = id;
-            find = this._get(id, ['_sk_id', '_id']).then(result => {
-                if (result.length > 0 && result[0]._id === id) {
-                    return result[0]._id;
-                }
-                return null;
-            });
+            if (typeof id == 'string') {
+                find = this._get(id).then(result => {
+                    if (result.length > 0 && result[0]._id === id) {
+                        return result[0];
+                    }
+                    return null;
+                });
+            }
+            else {
+                return this.updateMany(query, object, upsert);
+            }
         }
         else {
             if (Object.keys(query).length > 0) {
                 find = this.find(query, { limit: 1 }).then(results => {
                     if (results.length > 0 && results[0]._id) {
-                        return results[0]._id;
+                        return results[0];
                     }
                     return null;
                 });
@@ -272,16 +276,21 @@ class Partition {
         params.ConditionExpression = exp.Expression;
         params.ExpressionAttributeNames = exp.ExpressionAttributeNames;
         params.ExpressionAttributeValues = exp.ExpressionAttributeValues;
-        params.UpdateExpression = Expression_1.Expression.getUpdateExpression(object, params);
         return new Promise((resolve, reject) => {
-            find.then((id) => {
-                if (id) {
-                    params.Key._sk_id = id;
+            find.then((result) => {
+                if (result && result._id) {
+                    params.UpdateExpression = Expression_1.Expression.getUpdateExpression(object, params, result);
+                    params.Key._sk_id = result._id;
                     //console.log('UPDATE PARAMS', params);
                     this.dynamo.update(params, (err, data) => {
                         if (err) {
                             if (err.name == 'ConditionalCheckFailedException') {
-                                resolve({ ok: 1, n: 0, nModified: 0, value: null });
+                                if (upsert) {
+                                    reject(err);
+                                }
+                                else {
+                                    resolve({ ok: 1, n: 0, nModified: 0, value: null });
+                                }
                             }
                             else {
                                 reject(err);
@@ -317,9 +326,9 @@ class Partition {
     upsertOne(query = {}, object) {
         return this.updateOne(query, object, true);
     }
-    updateMany(query = {}, object) {
+    updateMany(query = {}, object, upsert = false) {
         let id = query['_id'];
-        if (id) {
+        if (typeof id == 'string') {
             return this.updateOne(query, object);
         }
         else {
@@ -330,13 +339,10 @@ class Partition {
                 res = res.filter(item => item._id != undefined);
                 if (res.length === 0)
                     throw new node_1.Parse.Error(node_1.Parse.Error.INVALID_QUERY, 'DynamoDB : cannot update nothing');
-                let promises = res.map(item => this.updateOne({ _id: item._id }, object));
+                let promises = res.map(item => this.updateOne({ _id: item._id }, object, upsert));
                 return new Promise((resolve, reject) => {
                     Promise.all(promises).then(res => {
-                        res = res.filter(item => {
-                            if (res.value)
-                                return res.value;
-                        });
+                        res = res.filter(item => item.value != undefined);
                         if (res.length > 0) {
                             resolve(res);
                         }

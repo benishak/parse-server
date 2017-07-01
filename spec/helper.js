@@ -35,7 +35,6 @@ const FSAdapter = require('parse-server-fs-adapter');
 const PostgresStorageAdapter = require('../src/Adapters/Storage/Postgres/PostgresStorageAdapter');
 const RedisCacheAdapter = require('../src/Adapters/Cache/RedisCacheAdapter').default;
 const DDB = require('../src/Adapters/Storage/DynamoDB').DynamoDB;
-const DDC = require('../src/Adapters/Storage/DynamoDB/Cache')._Cache;
 const mongoURI = 'mongodb://localhost:27017/parseServerMongoAdapterTestDatabase';
 const postgresURI = 'postgres://localhost:5432/parse_server_postgres_adapter_test_database';
 let databaseAdapter;

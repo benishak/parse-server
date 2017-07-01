@@ -216,25 +216,32 @@ describe('PushController', () => {
     reconfigureServer({
       push: { adapter: pushAdapter }
     }).then(() => {
+      console.log(0);
       return Parse.Object.saveAll(installations)
     }).then(() => {
+      return new Promise((resolve) => { setTimeout(() => { resolve(); }, 1000); });
+    }).then(() => {
+      console.log(2);
       return pushController.sendPush(payload, {}, config, auth);
     }).then(() => {
+      console.log(3);
       // Wait so the push is completed.
       return new Promise((resolve) => { setTimeout(() => { resolve(); }, 1000); });
     }).then(() => {
+      console.log('waited');
       // Check we actually sent 15 pushes.
       const query = new Parse.Query('_PushStatus');
       return query.find({ useMasterKey: true })
     }).then((results) => {
       expect(results.length).toBe(1);
       const pushStatus = results[0];
-      expect(pushStatus.get('numSent')).toBe(15);
+      expect(pushStatus.get('numSent')).toBe(15); console.log('numSet', pushStatus.get('numSent'));
     }).then(() => {
       // Check that the installations were actually updated.
       const query = new Parse.Query('_Installation');
       return query.find({ useMasterKey: true })
     }).then((results) => {
+      console.log('res',results);
       expect(results.length).toBe(15);
       for (var i = 0; i < 15; i++) {
         const installation = results[i];
@@ -314,6 +321,7 @@ describe('PushController', () => {
       expect(results.length).toBe(10);
       for (var i = 0; i < 10; i++) {
         const installation = results[i];
+        console.log(installation);
         expect(installation.get('badge')).toBe(1);
       }
       done()
