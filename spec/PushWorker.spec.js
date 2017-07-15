@@ -16,8 +16,10 @@ describe('PushWorker', () => {
       expect(new Config('test').pushWorker).toBeUndefined();
       new PushWorker({
         send: (body, installations) => {
+          console.log(installations);
           expect(installations.length <= batchSize).toBe(true);
           sendCount += installations.length;
+          console.log('sc', sendCount, '|',installations.length);
           return Promise.resolve();
         },
         getValidPushTypes: function() {

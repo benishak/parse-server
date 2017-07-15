@@ -120,30 +120,46 @@ class Expression {
             switch (_op) {
                 case '$push':
                 case '$addToSet':
-                    for (let key in (object[_op] || {})) {
-                        let o = object[_op][key] || {};
-                        if (lodash_1._.intersection(Object.keys(o), ['$slice', '$position']).length > 0)
-                            throw new node_1.Parse.Error(node_1.Parse.Error.INVALID_QUERY, 'DynamoDB cannot do this operation');
-                        if (o['$each']) {
-                            let list = o['$each'] || [];
-                            const sort = o['$sort'] || {};
-                            if (Object.keys(sort).length > 0 && list.constructor === Object) {
-                                list = lodash_1._.orderBy(list, Object.keys(sort), helpers_1.$.values(sort).map((k) => { if (k == 1)
-                                    return 'asc';
-                                else
-                                    return 'desc'; }));
-                            }
-                            o = _op == '$addToSet' ? lodash_1._.uniq(list) : list;
+                    Object.keys(object[_op] || {}).forEach(key => {
+                        let list = [];
+                        if (original[key] instanceof Array) {
+                            list = list.concat(original[key]);
+                        }
+                        if (object[_op][key] instanceof Array) {
+                            list = list.concat(object[_op][key]);
                         }
                         else {
-                            if (!(o instanceof Array)) {
-                                o = [].push(object[_op]);
+                            let o = object[_op][key];
+                            if (o && o.constructor === Object) {
+                                if (lodash_1._.intersection(Object.keys(o), ['$slice', '$position']).length > 0) {
+                                    throw new node_1.Parse.Error(node_1.Parse.Error.INVALID_QUERY, 'DynamoDB cannot do this operation');
+                                }
+                                else {
+                                    if (o.hasOwnProperty('$each') && o['$each'] instanceof Array) {
+                                        list = list.concat(o['$each']);
+                                        if (o['$sort']) {
+                                            let sortable = list.reduce((prev, item) => {
+                                                if (item && item.constructor === Object) {
+                                                    return prev && true;
+                                                }
+                                                else {
+                                                    return prev && false;
+                                                }
+                                            }, true);
+                                            if (sortable) {
+                                                list = lodash_1._.orderBy(list, Object.keys(o['$sort']), helpers_1.$.values(o['$sort']).map((k) => { if (k == 1)
+                                                    return 'asc';
+                                                else
+                                                    return 'desc'; }));
+                                            }
+                                        }
+                                    }
+                                }
                             }
                         }
-                        object[_op][key] = o;
-                    }
+                        object[_op][key] = _op == '$addToSet' ? lodash_1._.uniq(list) : list;
+                    });
                     $append = object[_op];
-                    _params.ExpressionAttributeValues[':__void__'] = [];
                     break;
                 case '$pullAll':
                     $del = object[_op] || {};
@@ -157,7 +173,6 @@ class Expression {
                     break;
                 case '$inc':
                     $inc = object['$inc'] || {};
-                    _params.ExpressionAttributeValues[':__zero__'] = 0;
                     break;
                 case '$currentDate':
                     for (let key in (object[_op] || {})) {
@@ -236,6 +251,7 @@ class Expression {
                 }
                 else {
                     path = Expression.transformPath(_params, path, value);
+                    _params.ExpressionAttributeValues[':__zero__'] = 0;
                     exp = '[key] = if_not_exists([key],:__zero__) + [value]';
                     exp = exp.replace(/\[key\]/g, path);
                     exp = exp.replace('[value]', _params._v);
@@ -243,13 +259,29 @@ class Expression {
                 }
             }
         });
-        Object.keys($append).forEach(key => {
-            if ($append[key] != undefined) {
-                let path = Expression.transformPath(_params, key, $append[key]);
-                let exp = '[key] = list_append(if_not_exists([key],:__void__),[value])';
-                exp = exp.replace(/\[key\]/g, path);
-                exp = exp.replace('[value]', _params._v);
-                _set.push(exp);
+        Object.keys($append).forEach(path => {
+            if ($append[path] != undefined) {
+                let exp;
+                let keys = path.split('.');
+                let a = keys[0];
+                if (keys.length > 0) {
+                    let list = lodash_1._.get(original, path, []);
+                    list.push($append[path]);
+                    lodash_1._.set(original, path, list);
+                    path = Expression.transformPath(_params, a, original[a]);
+                    exp = '[key] = [value]';
+                    exp = exp.replace(/\[key\]/g, path);
+                    exp = exp.replace('[value]', _params._v);
+                    _set.push(exp);
+                }
+                else {
+                    path = Expression.transformPath(_params, path, $append[path]);
+                    _params.ExpressionAttributeValues[':__void__'] = [];
+                    exp = '[key] = list_append(if_not_exists([key],:__void__),[value])';
+                    exp = exp.replace(/\[key\]/g, path);
+                    exp = exp.replace('[value]', _params._v);
+                    _set.push(exp);
+                }
             }
         });
         Object.keys($del).forEach(path => {

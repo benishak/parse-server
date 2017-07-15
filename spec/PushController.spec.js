@@ -235,7 +235,7 @@ describe('PushController', () => {
     }).then((results) => {
       expect(results.length).toBe(1);
       const pushStatus = results[0];
-      expect(pushStatus.get('numSent')).toBe(15); console.log('numSet', pushStatus.get('numSent'));
+      expect(pushStatus.get('numSent')).toBe(15);
     }).then(() => {
       // Check that the installations were actually updated.
       const query = new Parse.Query('_Installation');

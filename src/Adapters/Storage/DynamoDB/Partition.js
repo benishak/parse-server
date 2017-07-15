@@ -217,12 +217,21 @@ class Partition {
         object['_id'] = id;
         let params = {
             TableName: this.database,
-            Item: Object.assign({ _pk_className: this.className, _sk_id: id }, object)
+            Item: Object.assign({ _pk_className: this.className, _sk_id: id }, object),
+            ExpressionAttributeNames: {
+                '#id': '_sk_id',
+            },
+            ConditionExpression: 'attribute_not_exists(#id)',
         };
         return new Promise((resolve, reject) => {
             this.dynamo.put(params, (err, data) => {
                 if (err) {
-                    reject(err);
+                    if (err.name == 'ConditionalCheckFailedException') {
+                        reject(new node_1.Parse.Error(node_1.Parse.Error.DUPLICATE_VALUE, 'Class already exists.'));
+                    }
+                    else {
+                        reject(err);
+                    }
                 }
                 else {
                     resolve({ ok: 1, n: 1, ops: [object], insertedId: id });
@@ -424,7 +433,7 @@ class Partition {
                     throw new node_1.Parse.Error(node_1.Parse.Error.OBJECT_NOT_FOUND, 'Object not found');
                 let promises = res.map(item => this.deleteOne({ _id: item._id }));
                 return new Promise((resolve, reject) => {
-                    Promise.all(promises).then(res => resolve({ ok: 1, n: res.length, deletedCount: res.length })).catch(() => { throw new node_1.Parse.Error(node_1.Parse.Error.INTERNAL_SERVER_ERROR, 'DynamoDB : Internal Error'); });
+                    Promise.all(promises).then(res => resolve({ ok: 1, n: res.length, deletedCount: res.length })).catch(() => reject(new node_1.Parse.Error(node_1.Parse.Error.INTERNAL_SERVER_ERROR, 'DynamoDB : Internal Error')));
                 });
             });
         }
